@@ -432,9 +432,22 @@
     const el = document.getElementById('silentUnlock');
     if (el) { el.volume = 1; el.play().catch(() => {}); }
   }
+  // Every voice's gain node feeds this bus instead of the destination directly.
+  // The raw samples measure only ~0.07-0.09 peak amplitude (see SAMPLE_LEVEL_BOOST
+  // below) rather than clipping guards being unnecessary, a compressor here is
+  // cheap insurance against multiple simultaneous voices (base + harmony) adding
+  // up past 0 dBFS.
+  let masterBus = null;
   function ensureAudio() {
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      masterBus = audioCtx.createDynamicsCompressor();
+      masterBus.threshold.value = -12;
+      masterBus.knee.value = 12;
+      masterBus.ratio.value = 4;
+      masterBus.attack.value = 0.003;
+      masterBus.release.value = 0.15;
+      masterBus.connect(audioCtx.destination);
       preloadAllSamples();
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -529,7 +542,14 @@
     return best;
   }
 
-  function startVoice(midi, peakGain) {
+  // The recorded samples peak around 0.07-0.09 (they were never normalized to
+  // full scale), so the original peakGain values — tuned as if the source were
+  // a full-scale synth tone — landed voices at roughly 2-3% of full volume.
+  // Boost by a fixed factor to bring a single voice up to an audible level; the
+  // compressor on masterBus keeps stacked voices from adding up past 0 dBFS.
+  const SAMPLE_LEVEL_BOOST = 10;
+
+  function startVoice(midi, peakGain, loop) {
     ensureAudio();
     const now = audioCtx.currentTime;
     const name = nearestSampleName(midi);
@@ -537,8 +557,8 @@
 
     const gain = audioCtx.createGain();
     gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(peakGain, now + 0.006); // tiny declick, not a synth envelope
-    gain.connect(audioCtx.destination);
+    gain.gain.linearRampToValueAtTime(peakGain * SAMPLE_LEVEL_BOOST, now + 0.006); // tiny declick, not a synth envelope
+    gain.connect(masterBus);
 
     const voice = { gain, source: null, stopped: false };
     loadSample(name).then((buffer) => {
@@ -546,6 +566,18 @@
       const source = audioCtx.createBufferSource();
       source.buffer = buffer;
       source.playbackRate.value = rate;
+      if (loop) {
+        // The recording is a fixed ~3.1s clip that decays to silence on its own —
+        // a real piano note fades too, but not within a few seconds, and the UI
+        // promises the note keeps sounding until you release it. Loop the body of
+        // the clip (skipping the hammer-strike transient at the very start and the
+        // near-silent tail) so held notes keep sounding for as long as needed.
+        // There's an audible "breath" every loop where the volume steps back up —
+        // this isn't a seamless crossfaded loop — but it beats going silent.
+        source.loop = true;
+        source.loopStart = Math.min(0.12, buffer.duration * 0.25);
+        source.loopEnd = Math.max(source.loopStart + 0.1, buffer.duration - 0.08);
+      }
       source.connect(gain);
       source.start();
       voice.source = source;
@@ -614,7 +646,7 @@
     }
     if (baseVoice) stopVoice(baseVoice);
     document.querySelectorAll('.note-btn.active').forEach((b) => b.classList.remove('active'));
-    baseVoice = startVoice(midi, 0.28);
+    baseVoice = startVoice(midi, 0.28, true);
     activeBaseMidi = midi;
     btnEl.classList.add('active');
     setHarmonyEnabled(true);
@@ -628,7 +660,7 @@
     if (activeBaseMidi == null) return;
     const midi = activeBaseMidi + offset;
     if (harmonyVoice) stopVoice(harmonyVoice);
-    harmonyVoice = startVoice(midi, 0.24);
+    harmonyVoice = startVoice(midi, 0.24, true);
     activeHarmonyMidi = midi;
     currentIntervalLabel = label;
     document.querySelectorAll('.harm-btn.active').forEach((b) => b.classList.remove('active'));
