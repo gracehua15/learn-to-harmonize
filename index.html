@@ -215,6 +215,15 @@
   .feedback.correct { color: var(--base-color); }
   .mic-error { text-align: center; font-size: 12px; color: #ff9a9a; margin-top: 10px; }
   .streak { text-align: center; font-size: 13px; color: var(--muted); margin-top: 8px; }
+
+  .file-warning {
+    background: #3a1414; border: 1px solid #7a2b2b; color: #ffd7d7;
+    border-radius: 12px; padding: 12px 14px; font-size: 12.5px; line-height: 1.5;
+    margin-bottom: 16px;
+  }
+  .file-warning code {
+    background: #24080b; padding: 1px 5px; border-radius: 4px; font-size: 12px;
+  }
 </style>
 </head>
 <body>
@@ -226,6 +235,14 @@
     <h1>Harmon<span>ize</span></h1>
     <p>Learn to hear and sing harmony intervals over a sustained note</p>
   </header>
+
+  <div class="file-warning" id="fileWarning" hidden>
+    ⚠️ You opened this page directly as a file (<code id="fileWarningUrl"></code>).
+    Browsers block the piano samples from loading that way, so you won't hear
+    any sound. Serve the folder over HTTP instead, e.g. from a terminal in
+    this folder run <code>python3 -m http.server 8000</code> and open
+    <code>http://localhost:8000</code>.
+  </div>
 
   <div class="tabs">
     <div class="tab active" data-view="learn">Learn</div>
@@ -382,6 +399,18 @@
     {pc:4,label:'E'}, {pc:5,label:'F'}, {pc:6,label:'F♯ / G♭'}, {pc:7,label:'G'},
     {pc:8,label:'G♯ / A♭'}, {pc:9,label:'A'}, {pc:10,label:'A♯ / B♭'}, {pc:11,label:'B'}
   ];
+
+  // ---- file:// warning ----
+  // Loading samples needs fetch(), which browsers block for local files opened
+  // via file:// (double-click / Finder / Explorer) — silently, with no sound
+  // and no obvious error. Surface that up front instead of leaving it a mystery.
+  function checkFileProtocol() {
+    if (location.protocol !== 'file:') return;
+    const warning = document.getElementById('fileWarning');
+    const urlEl = document.getElementById('fileWarningUrl');
+    if (urlEl) urlEl.textContent = location.href;
+    if (warning) warning.hidden = false;
+  }
 
   // ---- state ----
   let audioCtx = null;
@@ -1077,6 +1106,7 @@
     document.addEventListener(evt, ensureAudio, { once: true, passive: true });
   });
 
+  checkFileProtocol();
   initTabs();
   initControls();
   initHarmonyButtons();
