@@ -183,12 +183,6 @@
     color: #14102a;
   }
 
-  /* Practice: detected-pitch key color on the shared piano */
-  .key.white.active-detected { background: linear-gradient(#d8c6ff, var(--accent)); }
-  .key.black.active-detected { background: linear-gradient(#9c7fe0, #6a4fc4); }
-  .key.white.active-base.active-detected { background: linear-gradient(90deg, var(--base-color) 50%, var(--accent) 50%); }
-  .key.black.active-base.active-detected { background: linear-gradient(90deg, #189a5c 50%, #6a4fc4 50%); }
-
   /* Practice: round + mic controls */
   .big-btn {
     width: 100%;
@@ -210,25 +204,28 @@
     font-size: 13px; font-weight: 600; padding: 4px 2px 12px; text-align: left;
   }
   .back-link:active { color: var(--text); }
-  .mic-btn.listening { background: linear-gradient(135deg, #ff5964, #b6293a); color: #fff2f2; border-color: transparent; }
-  .prompt { text-align: center; font-size: 16px; font-weight: 700; margin-top: 12px; min-height: 22px; }
-  .pitch-readout {
-    text-align: center; font-size: 24px; font-weight: 800; margin: 14px 0 8px;
-    font-variant-numeric: tabular-nums; color: var(--accent2);
+  .prompt { text-align: center; font-size: 16px; font-weight: 700; min-height: 22px; }
+
+  /* Practice run screen: base note on the left, a live vertical waveform on the
+     right that reacts to the mic input and is colored by pitch accuracy. */
+  .sing-row { display: flex; align-items: center; gap: 20px; margin: 16px 0 6px; }
+  .base-col {
+    flex: 0 0 auto; display: flex; flex-direction: column; align-items: center;
+    justify-content: center; gap: 10px; min-width: 92px;
   }
-  .cents-meter { position: relative; height: 10px; background: var(--card2); border-radius: 6px; margin: 0 4px 14px; }
-  .cents-meter::before {
-    content: ''; position: absolute; left: 50%; top: -4px; bottom: -4px; width: 2px;
-    background: var(--border); transform: translateX(-50%);
+  .base-col .np-val { font-size: 26px; }
+  .big-btn.small { width: auto; padding: 8px 18px; font-size: 13px; }
+  .wave-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+  #waveCanvas {
+    display: block; width: 100%; max-width: 130px; height: 180px;
+    background: #05030c; border: 1px solid var(--border); border-radius: 10px;
   }
-  .cents-needle {
-    position: absolute; top: -5px; left: 50%; width: 6px; height: 20px; border-radius: 3px;
-    background: var(--muted); transform: translateX(-50%);
-    transition: left 0.08s linear, background 0.15s;
+  .detected-note {
+    font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums;
+    color: var(--accent2); min-height: 24px;
   }
-  .cents-needle.close { background: var(--base-color); }
-  .cents-needle.far { background: var(--harm-color); }
-  .feedback { text-align: center; font-size: 15px; font-weight: 800; min-height: 20px; }
+  .mic-status { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
+  .feedback { text-align: center; font-size: 15px; font-weight: 800; min-height: 20px; margin-top: 6px; }
   .feedback.correct { color: var(--base-color); }
   .mic-error { text-align: center; font-size: 12px; color: #ff9a9a; margin-top: 10px; }
   .streak { text-align: center; font-size: 13px; color: var(--muted); margin-top: 8px; }
@@ -379,30 +376,19 @@
       <button class="back-link" id="backToSetupBtn">← Change keys / intervals</button>
 
       <div class="card">
-        <div class="piano-scale-hint">
-          <span><span class="dot" style="background:var(--base-color)"></span>Base note</span>
-          <span><span class="dot" style="background:var(--accent)"></span>You're singing</span>
-        </div>
-        <div class="piano-wrap">
-          <div id="piano2"></div>
-        </div>
-      </div>
-
-      <div class="card">
-        <div class="nowplaying">
-          <div class="np-item base">
+        <div class="prompt" id="practicePrompt">Press "New round" to begin.</div>
+        <div class="sing-row">
+          <div class="base-col">
             <div class="np-label">Base</div>
             <div class="np-val" id="pBaseNote">–</div>
+            <button class="big-btn small" id="playBaseBtn">▶ Play</button>
+          </div>
+          <div class="wave-col">
+            <canvas id="waveCanvas" width="72" height="180"></canvas>
+            <div class="detected-note" id="pitchReadout">–</div>
+            <div class="mic-status" id="micStatus">🎤 Listening…</div>
           </div>
         </div>
-        <button class="big-btn" id="playBaseBtn">▶ Play base note</button>
-        <div class="prompt" id="practicePrompt">Press "New round" to begin.</div>
-      </div>
-
-      <div class="card">
-        <button class="big-btn mic-btn" id="micBtn">🎤 Start listening</button>
-        <div class="pitch-readout" id="pitchReadout">–</div>
-        <div class="cents-meter"><div class="cents-needle" id="centsNeedle"></div></div>
         <div class="feedback" id="practiceFeedback"></div>
         <div class="mic-error" id="micError" hidden></div>
       </div>
@@ -887,7 +873,6 @@
           enabledKeys.add(pc);
           btn.classList.add('active');
         }
-        renderPracticePiano();
       });
       wrap.appendChild(btn);
     });
@@ -912,20 +897,21 @@
   function initPracticeControls() {
     const scaleSel = document.getElementById('pScaleSelect');
     scaleSel.value = practiceScaleType;
-    scaleSel.addEventListener('change', () => { practiceScaleType = scaleSel.value; renderPracticePiano(); });
+    scaleSel.addEventListener('change', () => { practiceScaleType = scaleSel.value; });
 
     const rangeSel = document.getElementById('pRangeSelect');
     rangeSel.value = practiceRangeStartOctave;
-    rangeSel.addEventListener('change', () => { practiceRangeStartOctave = parseInt(rangeSel.value, 10); renderPracticePiano(); });
+    rangeSel.addEventListener('change', () => { practiceRangeStartOctave = parseInt(rangeSel.value, 10); });
 
     document.getElementById('playBaseBtn').addEventListener('click', playPracticeBase);
     document.getElementById('newRoundBtn').addEventListener('click', generateRound);
-    document.getElementById('micBtn').addEventListener('click', () => { if (listening) stopListening(); else startListening(); });
 
     document.getElementById('startPracticeBtn').addEventListener('click', () => {
       document.getElementById('practiceSetup').hidden = true;
       document.getElementById('practiceSession').hidden = false;
+      clearWave();
       generateRound();
+      startListening(); // auto-start — same click, so still a real user gesture
     });
     document.getElementById('backToSetupBtn').addEventListener('click', () => {
       stopListening(); // don't leave the mic open while picking new settings
@@ -934,66 +920,21 @@
     });
   }
 
-  // Every possible base note across all 12 keys for the current scale/range, widened
-  // by an octave each way so a plausible sung octave still lands on the keyboard.
-  function practiceRangeBounds() {
-    const intervals = SCALES[practiceScaleType];
-    let min = Infinity, max = -Infinity;
-    for (let o = 0; o < 3; o++) {
-      const octave = practiceRangeStartOctave + o;
-      for (let pc = 0; pc < 12; pc++) {
-        for (const iv of intervals) {
-          const midi = 12 * (octave + 1) + pc + iv;
-          if (midi < min) min = midi;
-          if (midi > max) max = midi;
-        }
-      }
-    }
-    return { min: min - 12, max: max + 12 };
-  }
-
-  function renderPracticePiano() {
-    const { min, max } = practiceRangeBounds();
-    const low = Math.floor(min / 12) * 12;
-    const high = Math.ceil((max + 1) / 12) * 12 - 1;
-    renderPiano(document.getElementById('piano2'), low, high);
-    updatePracticePianoMarks();
-  }
-
-  // For display only: shows the detected pitch class in whichever octave sits
-  // closest to the base note, since a singer's comfortable octave won't match
-  // the piano's — the actual detected note/octave is still shown as text.
-  function nearestOctaveTransposition(midi, referenceMidi) {
-    const pc = ((midi % 12) + 12) % 12;
-    let best = null, bestDiff = Infinity;
-    for (let oct = -1; oct <= 8; oct++) {
-      const candidate = 12 * (oct + 1) + pc;
-      const diff = Math.abs(candidate - referenceMidi);
-      if (diff < bestDiff) { bestDiff = diff; best = candidate; }
-    }
-    return best;
-  }
-
-  function updatePracticePianoMarks() {
-    const detectedDisplay = lastDetectedMidi != null && practiceBaseMidi != null
-      ? nearestOctaveTransposition(lastDetectedMidi, practiceBaseMidi)
-      : null;
-    applyPianoMarks(document.getElementById('piano2'), {
-      'active-base': practiceBaseMidi,
-      'active-detected': detectedDisplay,
-    });
-  }
-
   // ---- practice: rounds ----
   function generateRound() {
     const keysPool = Array.from(enabledKeys);
     const intervalsPool = Array.from(enabledIntervals);
-    const root = keysPool[Math.floor(Math.random() * keysPool.length)];
+    const root = keysPool[Math.floor(Math.random() * keysPool.length)]; // a key's tonic pitch class, 0-11
     const intervals = SCALES[practiceScaleType];
+    const degree = intervals[Math.floor(Math.random() * intervals.length)]; // scale-degree interval, 0-11
+    // root+degree is folded back into a single pitch class first, THEN placed in a
+    // freely-chosen octave — adding degree on top of an already-picked octave (as a
+    // previous version did) let root+degree overflow up to ~2 octaves above the
+    // selected range, e.g. producing notes well above "B5" when Mid (C3-B5) was picked.
+    const pc = (root + degree) % 12;
     const octave = practiceRangeStartOctave + Math.floor(Math.random() * 3);
-    const degree = intervals[Math.floor(Math.random() * intervals.length)];
 
-    practiceBaseMidi = 12 * (octave + 1) + root + degree;
+    practiceBaseMidi = 12 * (octave + 1) + pc;
     const targetOffset = intervalsPool[Math.floor(Math.random() * intervalsPool.length)];
     practiceTargetMidi = practiceBaseMidi + targetOffset;
 
@@ -1006,8 +947,7 @@
     const fb = document.getElementById('practiceFeedback');
     fb.textContent = '';
     fb.className = 'feedback';
-    setNeedle(0, false);
-    updatePracticePianoMarks();
+    clearWave();
     playPracticeBase();
   }
 
@@ -1075,12 +1015,28 @@
     return best * 100;
   }
 
-  function setNeedle(cents, close) {
-    const clamped = Math.max(-50, Math.min(50, cents));
-    document.getElementById('centsNeedle').style.left = (50 + (clamped / 50) * 40) + '%';
-    const needle = document.getElementById('centsNeedle');
-    needle.classList.toggle('close', close);
-    needle.classList.toggle('far', !close);
+  // ---- practice: live vertical waveform ----
+  // A scrolling column: each tick draws one new strip at the top and pushes
+  // everything already drawn down, so the whole canvas reads as a waveform
+  // moving downward over time. Strip width tracks how loud you're singing;
+  // color tracks how close you are to the target pitch.
+  const waveCanvas = document.getElementById('waveCanvas');
+  const waveCtx = waveCanvas.getContext('2d');
+  const WAVE_BG = '#05030c';
+  const WAVE_COLORS = { quiet: '#453d6e', far: '#b892ff', close: '#34d399' };
+  function clearWave() {
+    waveCtx.fillStyle = WAVE_BG;
+    waveCtx.fillRect(0, 0, waveCanvas.width, waveCanvas.height);
+  }
+  function drawWaveTick(amplitude, state) {
+    const w = waveCanvas.width, h = waveCanvas.height, shift = 4;
+    waveCtx.drawImage(waveCanvas, 0, 0, w, h - shift, 0, shift, w, h - shift);
+    waveCtx.fillStyle = WAVE_BG;
+    waveCtx.fillRect(0, 0, w, shift);
+    const level = Math.min(1, amplitude * 14); // sung RMS is small; scale up for visibility
+    const barHalfWidth = Math.max(1.5, level * (w / 2 - 2));
+    waveCtx.fillStyle = WAVE_COLORS[state] || WAVE_COLORS.quiet;
+    waveCtx.fillRect(w / 2 - barHalfWidth, 0, barHalfWidth * 2, shift);
   }
 
   function markCorrect() {
@@ -1098,14 +1054,18 @@
       timeDomainBuf = new Float32Array(micAnalyser.fftSize);
     }
     micAnalyser.getFloatTimeDomainData(timeDomainBuf);
+
+    let rms = 0;
+    for (let i = 0; i < timeDomainBuf.length; i++) rms += timeDomainBuf[i] * timeDomainBuf[i];
+    rms = Math.sqrt(rms / timeDomainBuf.length);
+
     const freq = autoCorrelate(timeDomainBuf, audioCtx.sampleRate);
 
     if (freq === -1) {
-      document.getElementById('pitchReadout').textContent = 'Listening…';
-      setNeedle(0, false);
+      document.getElementById('pitchReadout').textContent = '–';
       correctHoldStart = null;
       lastDetectedMidi = null;
-      updatePracticePianoMarks();
+      drawWaveTick(rms, 'quiet');
       return;
     }
 
@@ -1116,10 +1076,10 @@
     document.getElementById('pitchReadout').textContent =
       `${noteName(roundedMidi)} (${fineCents > 0 ? '+' : ''}${fineCents}¢)`;
 
+    let close = false;
     if (practiceTargetMidi != null) {
       const cents = centsFromTarget(freq, practiceTargetMidi);
-      const close = Math.abs(cents) <= CENTS_TOLERANCE;
-      setNeedle(cents, close);
+      close = Math.abs(cents) <= CENTS_TOLERANCE;
       if (close && !roundSolved) {
         if (correctHoldStart == null) correctHoldStart = performance.now();
         else if (performance.now() - correctHoldStart >= CORRECT_HOLD_MS) markCorrect();
@@ -1127,9 +1087,17 @@
         correctHoldStart = null;
       }
     }
-    updatePracticePianoMarks();
+    drawWaveTick(rms, close ? 'close' : 'far');
   }
 
+  function setMicStatus(text) {
+    const el = document.getElementById('micStatus');
+    if (el) el.textContent = text;
+  }
+
+  // Called automatically on entering the run screen — no "Start listening" tap
+  // needed. Runs inside the same click handler as "Start practice", so the
+  // getUserMedia prompt still fires from a genuine user gesture.
   function startListening() {
     navigator.mediaDevices.getUserMedia({
       audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
@@ -1142,12 +1110,30 @@
       micSource.connect(micAnalyser);
       listening = true;
       correctHoldStart = null;
-      const btn = document.getElementById('micBtn');
-      btn.classList.add('listening');
-      btn.textContent = '⏹ Stop listening';
       document.getElementById('micError').hidden = true;
+      setMicStatus('🎤 Listening…');
       micIntervalId = setInterval(pitchTick, 80);
+
+      // A physically/OS-muted mic still grants permission but delivers silence —
+      // the track's mute/unmute events are the one signal the page gets for that,
+      // so surface it instead of leaving "no sound is detected" a mystery.
+      const track = stream.getAudioTracks()[0];
+      const showMuteHint = () => {
+        setMicStatus('🎤 Microphone muted');
+        const el = document.getElementById('micError');
+        el.hidden = false;
+        el.textContent = 'Your microphone seems to be muted at the OS or hardware level — unmute it to be heard.';
+      };
+      if (track) {
+        track.addEventListener('mute', showMuteHint);
+        track.addEventListener('unmute', () => {
+          setMicStatus('🎤 Listening…');
+          document.getElementById('micError').hidden = true;
+        });
+        if (track.muted) showMuteHint();
+      }
     }).catch((err) => {
+      setMicStatus('🎤 Mic unavailable');
       const el = document.getElementById('micError');
       el.hidden = false;
       el.textContent = err && err.name === 'NotAllowedError'
@@ -1162,13 +1148,10 @@
     if (micStream) { micStream.getTracks().forEach((t) => t.stop()); micStream = null; }
     if (micSource) { try { micSource.disconnect(); } catch (e) {} micSource = null; }
     micAnalyser = null;
-    const btn = document.getElementById('micBtn');
-    if (btn) { btn.classList.remove('listening'); btn.textContent = '🎤 Start listening'; }
+    setMicStatus('🎤 Mic off');
     const readout = document.getElementById('pitchReadout');
     if (readout) readout.textContent = '–';
-    setNeedle(0, false);
     lastDetectedMidi = null;
-    updatePracticePianoMarks();
   }
 
   // First tap anywhere on the page also unlocks audio, matching the on-screen hint —
@@ -1185,7 +1168,7 @@
   initKeyToggles();
   initIntervalToggles();
   initPracticeControls();
-  renderPracticePiano();
+  clearWave();
 })();
 </script>
 </body>
