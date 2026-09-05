@@ -36,7 +36,15 @@
   header h1 span { color: var(--accent2); }
   header p { color: var(--muted); font-size: 13px; margin-top: 4px; }
 
-  .tabs { display: flex; justify-content: center; gap: 8px; margin: 16px 0 20px; }
+  /* Sticky so it stays reachable once a tab's content grows past one screen —
+     otherwise scrolling down loses the only way back to another tab. */
+  .tabs {
+    display: flex; justify-content: center; gap: 8px;
+    position: sticky; top: 0; z-index: 10;
+    margin: 0 -16px 20px; padding: 16px 16px 10px;
+    background: rgba(16, 12, 31, 0.92);
+    -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+  }
   .tab {
     padding: 7px 16px; border-radius: 999px; font-size: 13px; font-weight: 600;
     border: 1px solid var(--border); color: var(--muted); background: var(--card);
@@ -193,6 +201,15 @@
     font-weight: 800;
   }
   .big-btn:active { filter: brightness(1.12); }
+  .big-btn.start-btn {
+    background: linear-gradient(135deg, var(--accent), #7c6bd6);
+    color: #14102a; border-color: transparent;
+  }
+  .back-link {
+    display: block; background: none; border: none; color: var(--muted);
+    font-size: 13px; font-weight: 600; padding: 4px 2px 12px; text-align: left;
+  }
+  .back-link:active { color: var(--text); }
   .mic-btn.listening { background: linear-gradient(135deg, #ff5964, #b6293a); color: #fff2f2; border-color: transparent; }
   .prompt { text-align: center; font-size: 16px; font-weight: 700; margin-top: 12px; min-height: 22px; }
   .pitch-readout {
@@ -317,73 +334,83 @@
   </div>
 
   <div id="practiceView" hidden>
-    <div class="card">
-      <div class="grid-title">Which keys to include</div>
-      <div class="toggle-grid keys" id="keyToggleGrid"></div>
-    </div>
-
-    <div class="card">
-      <div class="controls">
-        <div class="field">
-          <label for="pScaleSelect">Scale</label>
-          <select id="pScaleSelect">
-            <option value="major">Major</option>
-            <option value="minor">Natural Minor</option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="pRangeSelect">Range</label>
-          <select id="pRangeSelect">
-            <option value="2">Low (C2–B4)</option>
-            <option value="3" selected>Mid (C3–B5)</option>
-            <option value="4">High (C4–B6)</option>
-          </select>
-        </div>
+    <div id="practiceSetup">
+      <div class="card">
+        <div class="grid-title">Which keys to include</div>
+        <div class="toggle-grid keys" id="keyToggleGrid"></div>
       </div>
-    </div>
 
-    <div class="card">
-      <div class="grid-title">Which intervals to practice</div>
-      <div class="toggle-grid" id="intervalToggleGrid">
-        <button class="toggle-btn active" data-offset="4">Maj 3rd ↑</button>
-        <button class="toggle-btn active" data-offset="7">5th ↑</button>
-        <button class="toggle-btn active" data-offset="-4">Maj 3rd ↓</button>
-        <button class="toggle-btn active" data-offset="-7">5th ↓</button>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="piano-scale-hint">
-        <span><span class="dot" style="background:var(--base-color)"></span>Base note</span>
-        <span><span class="dot" style="background:var(--accent)"></span>You're singing</span>
-      </div>
-      <div class="piano-wrap">
-        <div id="piano2"></div>
-      </div>
-    </div>
-
-    <div class="card">
-      <div class="nowplaying">
-        <div class="np-item base">
-          <div class="np-label">Base</div>
-          <div class="np-val" id="pBaseNote">–</div>
+      <div class="card">
+        <div class="controls">
+          <div class="field">
+            <label for="pScaleSelect">Scale</label>
+            <select id="pScaleSelect">
+              <option value="major">Major</option>
+              <option value="minor">Natural Minor</option>
+            </select>
+          </div>
+          <div class="field">
+            <label for="pRangeSelect">Range</label>
+            <select id="pRangeSelect">
+              <option value="2">Low (C2–B4)</option>
+              <option value="3" selected>Mid (C3–B5)</option>
+              <option value="4">High (C4–B6)</option>
+            </select>
+          </div>
         </div>
       </div>
-      <button class="big-btn" id="playBaseBtn">▶ Play base note</button>
-      <div class="prompt" id="practicePrompt">Press "New round" to begin.</div>
+
+      <div class="card">
+        <div class="grid-title">Which intervals to practice</div>
+        <div class="toggle-grid" id="intervalToggleGrid">
+          <button class="toggle-btn active" data-offset="4">Maj 3rd ↑</button>
+          <button class="toggle-btn active" data-offset="7">5th ↑</button>
+          <button class="toggle-btn active" data-offset="-4">Maj 3rd ↓</button>
+          <button class="toggle-btn active" data-offset="-7">5th ↓</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <button class="big-btn start-btn" id="startPracticeBtn">▶ Start practice</button>
+      </div>
     </div>
 
-    <div class="card">
-      <button class="big-btn mic-btn" id="micBtn">🎤 Start listening</button>
-      <div class="pitch-readout" id="pitchReadout">–</div>
-      <div class="cents-meter"><div class="cents-needle" id="centsNeedle"></div></div>
-      <div class="feedback" id="practiceFeedback"></div>
-      <div class="mic-error" id="micError" hidden></div>
-    </div>
+    <div id="practiceSession" hidden>
+      <button class="back-link" id="backToSetupBtn">← Change keys / intervals</button>
 
-    <div class="card">
-      <button class="big-btn" id="newRoundBtn">New round</button>
-      <div class="streak" id="streakDisplay">Streak: 0</div>
+      <div class="card">
+        <div class="piano-scale-hint">
+          <span><span class="dot" style="background:var(--base-color)"></span>Base note</span>
+          <span><span class="dot" style="background:var(--accent)"></span>You're singing</span>
+        </div>
+        <div class="piano-wrap">
+          <div id="piano2"></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="nowplaying">
+          <div class="np-item base">
+            <div class="np-label">Base</div>
+            <div class="np-val" id="pBaseNote">–</div>
+          </div>
+        </div>
+        <button class="big-btn" id="playBaseBtn">▶ Play base note</button>
+        <div class="prompt" id="practicePrompt">Press "New round" to begin.</div>
+      </div>
+
+      <div class="card">
+        <button class="big-btn mic-btn" id="micBtn">🎤 Start listening</button>
+        <div class="pitch-readout" id="pitchReadout">–</div>
+        <div class="cents-meter"><div class="cents-needle" id="centsNeedle"></div></div>
+        <div class="feedback" id="practiceFeedback"></div>
+        <div class="mic-error" id="micError" hidden></div>
+      </div>
+
+      <div class="card">
+        <button class="big-btn" id="newRoundBtn">New round</button>
+        <div class="streak" id="streakDisplay">Streak: 0</div>
+      </div>
     </div>
   </div>
 
@@ -820,6 +847,7 @@
     document.getElementById('learnView').hidden = view !== 'learn';
     document.getElementById('practiceView').hidden = view !== 'practice';
     document.querySelectorAll('.tab[data-view]').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
+    if (view !== 'learn') stopEverything(); // don't leave Learn's base/harmony notes sounding in the background
     if (view !== 'practice') stopListening(); // release the mic once it's off-screen
   }
   function initTabs() {
@@ -893,6 +921,17 @@
     document.getElementById('playBaseBtn').addEventListener('click', playPracticeBase);
     document.getElementById('newRoundBtn').addEventListener('click', generateRound);
     document.getElementById('micBtn').addEventListener('click', () => { if (listening) stopListening(); else startListening(); });
+
+    document.getElementById('startPracticeBtn').addEventListener('click', () => {
+      document.getElementById('practiceSetup').hidden = true;
+      document.getElementById('practiceSession').hidden = false;
+      generateRound();
+    });
+    document.getElementById('backToSetupBtn').addEventListener('click', () => {
+      stopListening(); // don't leave the mic open while picking new settings
+      document.getElementById('practiceSession').hidden = true;
+      document.getElementById('practiceSetup').hidden = false;
+    });
   }
 
   // Every possible base note across all 12 keys for the current scale/range, widened
