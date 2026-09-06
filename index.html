@@ -138,12 +138,16 @@
     box-shadow: 0 0 0 2px rgba(52,211,153,0.35);
   }
 
-  /* Harmony panel */
+  /* Harmony panel: one column per direction, one row per interval */
   .harmony-panel {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: 8px;
     transition: opacity 0.2s;
+  }
+  .dir-head {
+    font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); text-align: center; padding-bottom: 2px;
   }
   .harmony-panel.disabled { opacity: 0.35; pointer-events: none; }
   .harm-btn {
@@ -168,6 +172,7 @@
   /* Practice: toggle grids (keys / intervals) */
   .toggle-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .toggle-grid.keys { grid-template-columns: repeat(6, 1fr); }
+  .toggle-grid.intervals { grid-template-columns: repeat(2, 1fr); }
   .toggle-btn {
     padding: 12px 4px;
     border-radius: 10px;
@@ -405,12 +410,7 @@
 
     <div class="card">
       <div class="grid-title">Hold a button to hear that harmony against the base note</div>
-      <div class="harmony-panel disabled" id="harmonyPanel">
-        <button class="harm-btn" data-offset="4" data-label="Major 3rd above">Maj 3rd ↑</button>
-        <button class="harm-btn" data-offset="7" data-label="5th above">5th ↑</button>
-        <button class="harm-btn" data-offset="-4" data-label="Major 3rd below">Maj 3rd ↓</button>
-        <button class="harm-btn" data-offset="-7" data-label="5th below">5th ↓</button>
-      </div>
+      <div class="harmony-panel disabled" id="harmonyPanel"></div>
       <div class="hint" id="hintText">Pick a note above to begin.</div>
     </div>
   </div>
@@ -444,12 +444,7 @@
 
       <div class="card">
         <div class="grid-title">Which intervals to practice</div>
-        <div class="toggle-grid" id="intervalToggleGrid">
-          <button class="toggle-btn active" data-offset="4">Maj 3rd ↑</button>
-          <button class="toggle-btn active" data-offset="7">5th ↑</button>
-          <button class="toggle-btn active" data-offset="-4">Maj 3rd ↓</button>
-          <button class="toggle-btn active" data-offset="-7">5th ↓</button>
-        </div>
+        <div class="toggle-grid intervals" id="intervalToggleGrid"></div>
       </div>
 
       <div class="card">
@@ -863,7 +858,22 @@
     document.getElementById('harmonyPanel').classList.toggle('disabled', !enabled);
   }
 
+  function buildHarmonyPanel() {
+    const panel = document.getElementById('harmonyPanel');
+    panel.innerHTML = '';
+    directionHeaders(panel);
+    eachIntervalCell((offset, short, label) => {
+      const btn = document.createElement('button');
+      btn.className = 'harm-btn';
+      btn.dataset.offset = offset;
+      btn.dataset.label = label;
+      btn.textContent = short;
+      panel.appendChild(btn);
+    });
+  }
+
   function initHarmonyButtons() {
+    buildHarmonyPanel();
     document.querySelectorAll('.harm-btn').forEach((btn) => {
       const offset = parseInt(btn.dataset.offset, 10);
       const label = btn.dataset.label;
@@ -1015,12 +1025,36 @@
   }
 
   // ---- practice: state ----
-  const INTERVAL_INFO = {
-    4: 'Major 3rd above',
-    7: '5th above',
-    '-4': 'Major 3rd below',
-    '-7': '5th below',
-  };
+  // Every interval Learn and Practice offer, in one place: both panels and the
+  // prompt/label lookups are built from this, so adding one adds it everywhere.
+  const HARMONY_INTERVALS = [
+    { semitones: 3, name: 'Minor 3rd', short: 'Min 3rd' },
+    { semitones: 4, name: 'Major 3rd', short: 'Maj 3rd' },
+    { semitones: 7, name: '5th',       short: '5th' },
+    { semitones: 8, name: 'Minor 6th', short: 'Min 6th' },
+    { semitones: 9, name: 'Major 6th', short: 'Maj 6th' },
+  ];
+  const INTERVAL_INFO = {};
+  HARMONY_INTERVALS.forEach((iv) => {
+    INTERVAL_INFO[iv.semitones] = `${iv.name} above`;
+    INTERVAL_INFO[-iv.semitones] = `${iv.name} below`;
+  });
+  // Walks the list as above/below pairs so a two-column grid fills row by row.
+  function eachIntervalCell(fn) {
+    HARMONY_INTERVALS.forEach((iv) => {
+      [1, -1].forEach((dir) => {
+        fn(iv.semitones * dir, `${iv.short} ${dir > 0 ? '↑' : '↓'}`, `${iv.name} ${dir > 0 ? 'above' : 'below'}`);
+      });
+    });
+  }
+  function directionHeaders(parent) {
+    ['Above', 'Below'].forEach((text) => {
+      const head = document.createElement('div');
+      head.className = 'dir-head';
+      head.textContent = text;
+      parent.appendChild(head);
+    });
+  }
   // Generic interval name for any semitone gap, used to describe what you're
   // actually singing relative to the base note (not just whether you've hit
   // the one target interval for this round).
@@ -1041,7 +1075,8 @@
   let practiceScaleType = 'major';
   let practiceRangeStartOctave = 3;
   const enabledKeys = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-  const enabledIntervals = new Set([4, 7, -4, -7]);
+  const enabledIntervals = new Set();
+  HARMONY_INTERVALS.forEach((iv) => { enabledIntervals.add(iv.semitones); enabledIntervals.add(-iv.semitones); });
   let practiceBaseMidi = null;
   let practiceTargetMidi = null;
   let lastDetectedMidi = null;
@@ -1068,8 +1103,14 @@
   }
 
   function initIntervalToggles() {
-    document.querySelectorAll('#intervalToggleGrid .toggle-btn').forEach((btn) => {
-      const offset = parseInt(btn.dataset.offset, 10);
+    const grid = document.getElementById('intervalToggleGrid');
+    grid.innerHTML = '';
+    directionHeaders(grid);
+    eachIntervalCell((offset, short) => {
+      const btn = document.createElement('button');
+      btn.className = 'toggle-btn' + (enabledIntervals.has(offset) ? ' active' : '');
+      btn.dataset.offset = offset;
+      btn.textContent = short;
       btn.addEventListener('click', () => {
         if (enabledIntervals.has(offset)) {
           if (enabledIntervals.size === 1) return; // always leave at least one interval enabled
@@ -1080,6 +1121,7 @@
           btn.classList.add('active');
         }
       });
+      grid.appendChild(btn);
     });
   }
 
