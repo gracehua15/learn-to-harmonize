@@ -539,8 +539,10 @@
           <select id="harmonySelect">
             <option value="smart-below" selected>Smart — below melody</option>
             <option value="smart-above">Smart — above melody</option>
-            <option value="third-above">Parallel 3rd above</option>
-            <option value="third-below">Parallel 3rd below</option>
+            <option value="third-above">Diatonic 3rd above (in key)</option>
+            <option value="third-below">Diatonic 3rd below (in key)</option>
+            <option value="major-third-above">Strict major 3rd above</option>
+            <option value="major-third-below">Strict major 3rd below</option>
           </select>
         </div>
       </div>
@@ -1922,8 +1924,16 @@
     if (!takeNotes.length || !takeKey) { takeChords = []; takeHarmony = []; return; }
     takeChords = inferChords(takeNotes, takeKey);
     if (style === 'third-above' || style === 'third-below') {
+      // Two scale degrees inside the key, so the third comes out major or minor
+      // as that degree requires and every note stays in key.
       const steps = style === 'third-above' ? 2 : -2;
       takeHarmony = takeNotes.map((n) => diatonicHarmony(n.midi, takeKey, steps));
+    } else if (style === 'major-third-above' || style === 'major-third-below') {
+      // Always exactly 4 semitones, whatever the key. Uniform by definition, and
+      // it will leave the key on most degrees (a major 3rd over D in C major is
+      // F#), so it clashes unless the melody is built for it.
+      const delta = style === 'major-third-above' ? 4 : -4;
+      takeHarmony = takeNotes.map((n) => n.midi + delta);
     } else {
       takeHarmony = buildHarmony(takeNotes, takeChords, style === 'smart-below');
     }
