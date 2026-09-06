@@ -349,9 +349,9 @@
           <div class="field">
             <label for="pRangeSelect">Range</label>
             <select id="pRangeSelect">
-              <option value="2">Low (C2–B4)</option>
-              <option value="3" selected>Mid (C3–B5)</option>
-              <option value="4">High (C4–B6)</option>
+              <option value="2">Low (C2–B3)</option>
+              <option value="3" selected>Mid (C3–B4)</option>
+              <option value="4">High (C4–B5)</option>
             </select>
           </div>
         </div>
@@ -943,7 +943,9 @@
     // previous version did) let root+degree overflow up to ~2 octaves above the
     // selected range, e.g. producing notes well above "B5" when Mid (C3-B5) was picked.
     const pc = (root + degree) % 12;
-    const octave = practiceRangeStartOctave + Math.floor(Math.random() * 3);
+    // Each range spans 2 octaves (not 3) — e.g. Mid stays within C3-B4 — so the
+    // "High" end of a range doesn't creep up to a full octave above what's labeled.
+    const octave = practiceRangeStartOctave + Math.floor(Math.random() * 2);
 
     practiceBaseMidi = 12 * (octave + 1) + pc;
     const targetOffset = intervalsPool[Math.floor(Math.random() * intervalsPool.length)];
