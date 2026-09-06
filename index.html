@@ -569,6 +569,14 @@
           <button class="edit-btn" data-scale="0.75">◀ Shorter</button>
           <button class="edit-btn" data-scale="1.3333">Longer ▶</button>
         </div>
+        <div class="editor-label editor-length">Harmony note <strong id="editorHarmony"></strong></div>
+        <div class="editor-buttons">
+          <button class="edit-btn" data-harm="-12">−8ve</button>
+          <button class="edit-btn" data-harm="-1">♭ down</button>
+          <button class="edit-btn" data-harm="1">♯ up</button>
+          <button class="edit-btn" data-harm="12">+8ve</button>
+          <button class="edit-btn" id="editorHarmPlayBtn">▶ Hear</button>
+        </div>
       </div>
     </div>
 
@@ -581,6 +589,7 @@
             <option value="smart-above">Smart — above melody</option>
             <option value="third-above">3rd above (in key)</option>
             <option value="third-below">3rd below (in key)</option>
+            <option value="custom">Custom — hand-edited</option>
           </select>
         </div>
       </div>
@@ -588,7 +597,6 @@
         <button class="big-btn" id="playMelodyBtn">▶ Melody only</button>
         <button class="big-btn" id="playHarmonyBtn">▶ Harmony only</button>
         <button class="big-btn start-btn" id="playBothBtn">▶ Play together</button>
-        <button class="big-btn" id="addLineBtn">＋ Add as line 1</button>
       </div>
       <button class="back-link" id="clearTakeBtn">↺ Record a new take</button>
     </div>
@@ -1631,6 +1639,7 @@
   let takeNotes = [];                   // [{midi, startMs, durMs}]
   let takeKey = null;                   // {root, type}
   let takeChords = [];                  // inferred chord per note
+  let harmonyCustom = false;            // true once a harmony note is edited by hand
   let takeHarmony = [];                 // harmony midi per note
   let selectedNoteIndex = null;         // note currently open for editing
   let takeLyrics = [];                  // one syllable per note, index-aligned
@@ -1640,6 +1649,7 @@
   let editingLineIndex = null;          // which line the take on screen belongs to, if any
   const SONG_LINE_GAP_SEC = 0.45;       // breath between lines when playing the whole song
   const MIN_EDIT_NOTE_MS = 90, MAX_EDIT_NOTE_MS = 4000;
+  const NOTE_GAP_MS = 60;               // one fixed pause between notes, whatever was sung
 
   function setRecStatus(text) {
     const el = document.getElementById('recStatus');
@@ -1902,6 +1912,17 @@
     }));
   }
 
+  // Recorded start times keep every breath, hesitation and consonant gap exactly
+  // as sung, which plays back ragged. Lay the notes out end to end with one
+  // constant pause instead, so the only timing you control is note length.
+  function relayoutTake() {
+    let cursor = 0;
+    takeNotes.forEach((n) => {
+      n.startMs = cursor;
+      cursor += n.durMs + NOTE_GAP_MS;
+    });
+  }
+
   // Krumhansl-Schmuckler key profiles: how strongly each scale degree is
   // perceived as belonging to a major/minor key. Correlating the sung
   // pitch-class histogram against these beats simply counting in-key notes,
@@ -2121,8 +2142,16 @@
   function analyzeTake() {
     takeKey = detectKey(takeNotes);
     const style = harmonyStyle();
+    harmonyCustom = style === 'custom';
     if (!takeNotes.length || !takeKey) { takeChords = []; takeHarmony = []; return; }
     takeChords = inferChords(takeNotes, takeKey);
+    if (harmonyCustom) {
+      // Hand-edited: keep every note that was set, fill any gaps from the key.
+      takeHarmony = takeNotes.map((n, i) => (
+        takeHarmony[i] != null ? takeHarmony[i] : diatonicHarmony(n.midi, takeKey, -2)
+      ));
+      return;
+    }
     if (style === 'third-above' || style === 'third-below') {
       // Two scale degrees inside the key: the third lands major or minor as that
       // degree requires (in C major C-E and F-A and G-B are major; D-F, E-G,
@@ -2203,9 +2232,14 @@
     document.getElementById('editorLyric').value = takeLyrics[selectedNoteIndex] || '';
     document.getElementById('editorLength').textContent =
       (takeNotes[selectedNoteIndex].durMs / 1000).toFixed(2) + 's';
+    const h = takeHarmony[selectedNoteIndex];
+    document.getElementById('editorHarmony').textContent = h != null
+      ? `${noteName(h)} (${intervalTag(takeNotes[selectedNoteIndex].midi, h)})`
+      : '—';
   }
 
   function selectNote(index) {
+    stopTakePlayback();                 // reaching for a note means "stop, let me hear this one"
     selectedNoteIndex = selectedNoteIndex === index ? null : index;
     if (selectedNoteIndex != null) {
       ensureAudio();
@@ -2234,9 +2268,8 @@
     if (selectedNoteIndex == null) return;
     const note = takeNotes[selectedNoteIndex];
     const next = Math.max(MIN_EDIT_NOTE_MS, Math.min(MAX_EDIT_NOTE_MS, Math.round(note.durMs * factor)));
-    const delta = next - note.durMs;
     note.durMs = next;
-    for (let i = selectedNoteIndex + 1; i < takeNotes.length; i++) takeNotes[i].startMs += delta;
+    relayoutTake();                     // gaps stay constant; everything after just shifts
     renderTake();
     saveCurrentLine();
     ensureAudio();
@@ -2244,10 +2277,28 @@
       audioCtx.currentTime + Math.max(MIN_RING_SEC, note.durMs / 1000 + NOTE_TAIL_SEC));
   }
 
+  // Nudging a harmony note turns the whole line into a custom one, so the
+  // generated harmony stops overwriting the choices made by hand.
+  function adjustSelectedHarmony(delta) {
+    if (selectedNoteIndex == null) return;
+    const current = takeHarmony[selectedNoteIndex];
+    if (current == null) return;
+    const next = Math.max(24, Math.min(96, current + delta));
+    takeHarmony[selectedNoteIndex] = next;
+    harmonyCustom = true;
+    document.getElementById('harmonySelect').value = 'custom';
+    renderTake();
+    saveCurrentLine();
+    ensureAudio();
+    startVoice(next, 0.24);
+  }
+
   function deleteSelectedNote() {
     if (selectedNoteIndex == null) return;
     takeNotes.splice(selectedNoteIndex, 1);
     takeLyrics.splice(selectedNoteIndex, 1); // the word goes with its note
+    takeHarmony.splice(selectedNoteIndex, 1); // and so does its harmony note
+    relayoutTake();
     syncLyricsInput();
     selectedNoteIndex = null;
     if (!takeNotes.length) {
@@ -2267,6 +2318,7 @@
     if (!recFrames.length) return;
     const typed = document.getElementById('lyricsInput').value;
     takeNotes = segmentFrames(recFrames);
+    relayoutTake();
     selectedNoteIndex = null;
     stopTakePlayback();
     if (!takeNotes.length) {
@@ -2285,6 +2337,7 @@
 
   function finishTake() {
     takeNotes = segmentFrames(recFrames);
+    relayoutTake();
     window.__DEBUG_TAKE = { frames: recFrames, notes: takeNotes }; // console/test inspection hook
     selectedNoteIndex = null;
     editingLineIndex = null;            // a new take isn't part of the song until added
@@ -2368,6 +2421,7 @@
       chords: takeChords.slice(),
       harmony: takeHarmony.slice(),
       style: harmonyStyle(),
+      custom: harmonyCustom,
     };
   }
 
@@ -2378,6 +2432,7 @@
     takeChords = line.chords.slice();
     takeHarmony = line.harmony.slice();
     if (line.style) document.getElementById('harmonySelect').value = line.style;
+    harmonyCustom = !!line.custom;
     selectedNoteIndex = null;
     syncLyricsInput();
     document.getElementById('transcriptCard').hidden = false;
@@ -2400,16 +2455,9 @@
     updateAddLineBtn();
   }
 
-  function updateAddLineBtn() {
-    const btn = document.getElementById('addLineBtn');
-    if (editingLineIndex != null) {
-      btn.textContent = `✓ Saved as line ${editingLineIndex + 1}`;
-      btn.disabled = true;
-    } else {
-      btn.textContent = `＋ Add as line ${songLines.length + 1}`;
-      btn.disabled = false;
-    }
-  }
+  // The add-as-line control is out for now; the song machinery stays so lines
+  // can be brought back without rebuilding it.
+  function updateAddLineBtn() {}
 
   function renderSongList() {
     const wrap = document.getElementById('songLines');
@@ -2531,7 +2579,14 @@
     document.querySelectorAll('#noteEditor .edit-btn[data-scale]').forEach((btn) => {
       btn.addEventListener('click', () => adjustSelectedLength(parseFloat(btn.dataset.scale)));
     });
-    document.getElementById('addLineBtn').addEventListener('click', addCurrentAsLine);
+    document.querySelectorAll('#noteEditor .edit-btn[data-harm]').forEach((btn) => {
+      btn.addEventListener('click', () => adjustSelectedHarmony(parseInt(btn.dataset.harm, 10)));
+    });
+    document.getElementById('editorHarmPlayBtn').addEventListener('click', () => {
+      if (selectedNoteIndex == null || takeHarmony[selectedNoteIndex] == null) return;
+      ensureAudio();
+      startVoice(takeHarmony[selectedNoteIndex], 0.24);
+    });
     document.getElementById('playSongBtn').addEventListener('click', () => playLines(songLines, 'both'));
     document.getElementById('sensitivitySelect').addEventListener('change', resegmentTake);
     document.getElementById('lyricsInput').addEventListener('input', (e) => {
