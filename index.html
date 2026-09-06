@@ -227,6 +227,7 @@
   .mic-status { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
   .feedback { text-align: center; font-size: 15px; font-weight: 800; min-height: 20px; margin-top: 6px; }
   .feedback.correct { color: var(--base-color); }
+  .feedback.nudge { color: var(--harm-color); font-weight: 700; font-size: 13.5px; }
   .mic-error { text-align: center; font-size: 12px; color: #ff9a9a; margin-top: 10px; }
   .streak { text-align: center; font-size: 13px; color: var(--muted); margin-top: 8px; }
 
@@ -1027,9 +1028,15 @@
     'Unison', 'Minor 2nd', 'Major 2nd', 'Minor 3rd', 'Major 3rd', 'Perfect 4th',
     'Tritone', 'Perfect 5th', 'Minor 6th', 'Major 6th', 'Minor 7th', 'Major 7th',
   ];
+  // Direction matters: folding the gap into a pitch class turned a 4th BELOW
+  // into "Perfect 5th" (7 semitones up = 5 semitones down, mod 12), which told
+  // a singer they were on the right interval while they were a step off.
   function intervalNameFromSemitones(semitones) {
-    const pc = ((semitones % 12) + 12) % 12;
-    return GENERIC_INTERVAL_NAMES[pc];
+    if (semitones === 0) return null;              // unison isn't an interval worth naming
+    const gap = Math.abs(semitones);
+    const direction = semitones > 0 ? 'above' : 'below';
+    if (gap % 12 === 0) return `Octave ${direction}`;
+    return `${GENERIC_INTERVAL_NAMES[gap % 12]} ${direction}`;
   }
   let practiceScaleType = 'major';
   let practiceRangeStartOctave = 3;
@@ -1124,6 +1131,8 @@
 
     roundSolved = false;
     correctHoldStart = null;
+    wrongHoldStart = null;
+    wrongHoldMidi = null;
     lastDetectedMidi = null;
 
     document.getElementById('pBaseNote').textContent = noteName(practiceBaseMidi);
@@ -1146,6 +1155,8 @@
   let micStream = null, micSource = null, micAnalyser = null, micIntervalId = null;
   let listening = false, timeDomainBuf = null;
   let correctHoldStart = null, roundSolved = false;
+  let wrongHoldStart = null, wrongHoldMidi = null;
+  const WRONG_HINT_MS = 900;            // hold a wrong note this long and we say what's off
   const CENTS_TOLERANCE = 25;
   const CORRECT_HOLD_MS = 400;
 
@@ -1225,6 +1236,17 @@
     waveCtx.fillRect(w / 2 - barHalfWidth, 0, barHalfWidth * 2, shift);
   }
 
+  function showIntervalHint(sungMidi) {
+    if (practiceBaseMidi == null || practiceTargetMidi == null) return;
+    const sung = intervalNameFromSemitones(sungMidi - practiceBaseMidi);
+    const wanted = INTERVAL_INFO[practiceTargetMidi - practiceBaseMidi];
+    const fb = document.getElementById('practiceFeedback');
+    fb.textContent = sung
+      ? `That's a ${sung} — you want the ${wanted} (${noteName(practiceTargetMidi)})`
+      : `That's the base note — you want the ${wanted} (${noteName(practiceTargetMidi)})`;
+    fb.className = 'feedback nudge';
+  }
+
   function markCorrect() {
     roundSolved = true;
     streak++;
@@ -1279,6 +1301,21 @@
         else if (performance.now() - correctHoldStart >= CORRECT_HOLD_MS) markCorrect();
       } else if (!close) {
         correctHoldStart = null;
+      }
+      // Holding a steady note that still isn't scoring is confusing unless we
+      // say what's actually being sung against what's wanted.
+      if (!roundSolved) {
+        if (close) {
+          wrongHoldStart = null;
+          wrongHoldMidi = null;
+        } else if (wrongHoldMidi === roundedMidi) {
+          if (wrongHoldStart != null && performance.now() - wrongHoldStart >= WRONG_HINT_MS) {
+            showIntervalHint(roundedMidi);
+          }
+        } else {
+          wrongHoldMidi = roundedMidi;
+          wrongHoldStart = performance.now();
+        }
       }
     }
     drawWaveTick(rms, close ? 'close' : 'far');
