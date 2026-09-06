@@ -268,9 +268,11 @@
     min-height: 13px;
   }
   .note-chip.active .chip-lyric, .note-chip.active-harm .chip-lyric { color: #06210f; }
+  .chip-interval { font-size: 9px; font-weight: 700; color: var(--muted); min-height: 12px; }
+  .note-chip.active .chip-interval, .note-chip.active-harm .chip-interval { color: #2a1a00; }
   .note-chip {
     display: flex; flex-direction: column; align-items: center; gap: 1px;
-    min-width: 52px; padding: 7px 8px;
+    min-width: 58px; padding: 7px 8px;
     border-radius: 9px; border: 1px solid var(--border); background: var(--card2);
     font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
     transition: background 0.1s, color 0.1s, border-color 0.1s;
@@ -701,15 +703,31 @@
   // compressor on masterBus keeps stacked voices from adding up past 0 dBFS.
   const SAMPLE_LEVEL_BOOST = 10;
 
-  function startVoice(midi, peakGain, loop) {
+  const NOTE_RELEASE = 0.09;             // key-lift fade when a note is given an end time
+
+  // `when` and `stopAt` are absolute audioCtx times. Passing them schedules the
+  // note on the audio clock instead of firing it "now", which is what keeps a
+  // played-back melody in time — setTimeout is far too jittery for rhythm.
+  function startVoice(midi, peakGain, loop, when, stopAt) {
     ensureAudio();
-    const now = audioCtx.currentTime;
+    const t0 = when != null ? when : audioCtx.currentTime;
     const name = nearestSampleName(midi);
     const rate = Math.pow(2, (midi - SAMPLE_MIDI[name]) / 12);
+    const peak = peakGain * SAMPLE_LEVEL_BOOST;
 
     const gain = audioCtx.createGain();
-    gain.gain.setValueAtTime(0, now);
-    gain.gain.linearRampToValueAtTime(peakGain * SAMPLE_LEVEL_BOOST, now + 0.006); // tiny declick, not a synth envelope
+    gain.gain.value = 0;                // silent until the scheduled attack
+    gain.gain.setValueAtTime(0, t0);
+    gain.gain.linearRampToValueAtTime(peak, t0 + 0.006); // tiny declick, not a synth envelope
+    // Without an end time a note rings for the sample's full ~3.1s decay, so a
+    // melody piles 7-8 overlapping notes into a wash. Release it instead.
+    let releaseEnd = null;
+    if (stopAt != null) {
+      const releaseStart = Math.max(t0 + 0.007, stopAt - NOTE_RELEASE);
+      releaseEnd = releaseStart + NOTE_RELEASE;
+      gain.gain.setValueAtTime(peak, releaseStart);
+      gain.gain.linearRampToValueAtTime(0, releaseEnd);
+    }
     gain.connect(masterBus);
 
     const voice = { gain, source: null, stopped: false };
@@ -731,7 +749,8 @@
         source.loopEnd = Math.max(source.loopStart + 0.1, buffer.duration - 0.08);
       }
       source.connect(gain);
-      source.start();
+      source.start(t0);
+      if (releaseEnd != null) source.stop(releaseEnd + 0.02);
       voice.source = source;
     }).catch(() => {});
     return voice;
@@ -1343,6 +1362,9 @@
   const FLUX_WINDOW = 10;               // frames of history for the adaptive flux threshold
   const FLUX_RATIO = 1.8;               // spectral change vs recent average that counts as a syllable
   const FLUX_MIN = 1.0;                 // floor, in mean dB change per bin
+  const FLUX_SETTLE_FRAMES = 5;         // ignore flux while the spectrum resettles after a pitch change
+  const PITCH_SETTLE_FRAMES = 2;        // frames the pitch detector needs to catch up after a boundary
+  const FLUX_BIN_FLOOR = -100;          // dB below which a bin is treated as empty
   let recStream = null, recSource = null, recAnalyser = null, recIntervalId = null;
   let recBuf = null, recording = false, recFrames = [], recStartedAt = 0;
   let recSpec = null, recPrevSpec = null;
@@ -1353,7 +1375,7 @@
   let selectedNoteIndex = null;         // note currently open for editing
   let takeLyrics = [];                  // one syllable per note, index-aligned
   let speechWords = [], recognizer = null;
-  let takeTimers = [], takePlaying = false;
+  let takeTimers = [], takeVoices = [], takePlaying = false;
 
   function setRecStatus(text) {
     const el = document.getElementById('recStatus');
@@ -1370,6 +1392,7 @@
       recSource = audioCtx.createMediaStreamSource(stream);
       recAnalyser = audioCtx.createAnalyser();
       recAnalyser.fftSize = 2048;
+      recAnalyser.smoothingTimeConstant = 0; // smoothing blurs the onset transient
       recSource.connect(recAnalyser);
       recFrames = [];
       recPrevSpec = null;
@@ -1408,20 +1431,28 @@
     recAnalyser.getFloatFrequencyData(recSpec);
     let flux = 0;
     if (recPrevSpec) {
+      let active = 0;
       for (let i = 0; i < recSpec.length; i++) {
         const cur = recSpec[i] < -140 || !isFinite(recSpec[i]) ? -140 : recSpec[i];
         const prev = recPrevSpec[i] < -140 || !isFinite(recPrevSpec[i]) ? -140 : recPrevSpec[i];
+        if (cur < FLUX_BIN_FLOOR && prev < FLUX_BIN_FLOOR) continue; // empty bin, carries no news
+        active++;
         const diff = cur - prev;
         if (diff > 0) flux += diff;         // rises only: onsets, not decays
       }
-      flux /= recSpec.length;
+      // Averaged over the bins that actually carry energy, so the measure means
+      // the same thing for a bright dense voice and a pure sustained tone.
+      flux = active ? flux / active : 0;
     }
     if (!recPrevSpec) recPrevSpec = new Float32Array(recSpec.length);
     recPrevSpec.set(recSpec);
 
     const freq = autoCorrelate(recBuf, audioCtx.sampleRate);
     const midi = freq === -1 ? null : Math.round(69 + 12 * Math.log2(freq / 440));
-    recFrames.push({ midi: midi, rms: rms, flux: flux });
+    // Real elapsed time, not the nominal tick interval: setInterval drifts, and
+    // deriving durations from a frame count silently accumulates that error
+    // across the whole take.
+    recFrames.push({ midi: midi, rms: rms, flux: flux, t: performance.now() - recStartedAt });
     document.getElementById('recLiveNote').textContent = midi == null ? '' : noteName(midi);
     const elapsed = performance.now() - recStartedAt;
     setRecStatus(`Recording — ${(elapsed / 1000).toFixed(1)}s`);
@@ -1479,50 +1510,93 @@
     const minGap = Math.max(2, Math.round(MIN_NOTE_MS / REC_FRAME_MS));
     const onsets = new Array(frames.length).fill(false);
     let lastOnset = -Infinity;
+    // A pitch change is already a note boundary, and the spectrum takes a few
+    // frames to resettle afterwards — counting that settling as a fresh attack
+    // splits one long note into two.
+    let lastPitchChange = -Infinity;
     for (let i = 3; i < frames.length; i++) {
       const f = frames[i];
+      if (frames[i].midi !== frames[i - 1].midi) lastPitchChange = i;
       if (f.rms < ONSET_MIN_RMS) continue;          // silence can't start a note
       if (i - lastOnset < minGap) continue;         // one attack can't follow another instantly
+
       const prevRms = (frames[i - 1].rms + frames[i - 2].rms + frames[i - 3].rms) / 3;
       const loudJump = f.rms > Math.max(ONSET_MIN_RMS, prevRms * ONSET_RATIO);
+
       let fluxSum = 0, fluxCount = 0;
       for (let j = Math.max(0, i - FLUX_WINDOW); j < i; j++) { fluxSum += frames[j].flux || 0; fluxCount++; }
       const meanFlux = fluxCount ? fluxSum / fluxCount : 0;
-      const newSyllable = (f.flux || 0) > Math.max(FLUX_MIN, meanFlux * FLUX_RATIO);
+      const flux = f.flux || 0;
+      const settled = i - lastPitchChange > FLUX_SETTLE_FRAMES;
+      // Only a local peak counts, so a slow spectral drift can't trip it.
+      const isPeak = flux >= (frames[i - 1].flux || 0) && flux > (frames[i + 1] ? frames[i + 1].flux || 0 : 0);
+      const newSyllable = settled && isPeak && flux > Math.max(FLUX_MIN, meanFlux * FLUX_RATIO);
+
       if (loudJump || newSyllable) { onsets[i] = true; lastOnset = i; }
     }
 
-    const runs = [];
-    frames.forEach((f, i) => {
-      const last = runs[runs.length - 1];
-      // A run continues while the pitch holds, unless a fresh attack says the
-      // singer re-articulated the same note.
-      if (last && last.midi === f.midi && !onsets[i]) last.count++;
-      else runs.push({ midi: f.midi, count: 1, onset: !!onsets[i] });
-    });
+    // Boundaries come from three signals: a detected attack, speech starting or
+    // stopping, and a change of pitch.
+    const isBoundary = new Array(frames.length).fill(false);
+    for (let i = 1; i < frames.length; i++) {
+      const prev = frames[i - 1], cur = frames[i];
+      const silenceChanged = (prev.midi == null) !== (cur.midi == null);
+      const pitchChanged = prev.midi != null && cur.midi != null && prev.midi !== cur.midi;
+      if (onsets[i] || silenceChanged || pitchChanged) isBoundary[i] = true;
+    }
 
-    const minFrames = Math.max(2, Math.round(MIN_NOTE_MS / REC_FRAME_MS));
-    const merged = [];
-    runs.forEach((run) => {
-      const last = merged[merged.length - 1];
-      if (run.count < minFrames) {
-        if (last) last.count += run.count; // absorb the blip into whatever came before
+    const segments = [];
+    let segStart = 0;
+    for (let i = 1; i <= frames.length; i++) {
+      if (i === frames.length || isBoundary[i]) {
+        segments.push({ start: segStart, end: i, onset: !!onsets[segStart] });
+        segStart = i;
+      }
+    }
+
+    // End of a segment = start of the next frame; the last frame is assumed to
+    // have lasted one nominal tick.
+    const edgeMs = (index) => (frames[index] ? frames[index].t : frames[frames.length - 1].t + REC_FRAME_MS);
+
+    const kept = [];
+    segments.forEach((seg) => {
+      const last = kept[kept.length - 1];
+      if (edgeMs(seg.end) - frames[seg.start].t < MIN_NOTE_MS && last) {
+        last.end = seg.end; // too short to be a note: fold it into the one before
         return;
       }
-      // Same-pitch neighbours re-join (healing dropped frames) — but never
-      // across an attack, or repeated notes would collapse back into one.
-      if (last && last.midi === run.midi && !run.onset) last.count += run.count;
-      else merged.push({ midi: run.midi, count: run.count, onset: run.onset });
+      kept.push(seg);
     });
 
-    const notes = [];
-    let cursorMs = 0;
-    merged.forEach((run) => {
-      const durMs = run.count * REC_FRAME_MS;
-      if (run.midi != null) notes.push({ midi: run.midi, startMs: cursorMs, durMs: durMs });
-      cursorMs += durMs;
+    // The pitch detector reads a 2048-sample window, so for a frame or two after
+    // a boundary it still reports the PREVIOUS note. Take each segment's pitch as
+    // the most common value once it has settled, not the value at its first frame,
+    // otherwise a new note gets labelled with the old note's pitch.
+    kept.forEach((seg) => {
+      const counts = new Map();
+      const from = Math.min(seg.start + PITCH_SETTLE_FRAMES, seg.end - 1);
+      for (let i = from; i < seg.end; i++) {
+        counts.set(frames[i].midi, (counts.get(frames[i].midi) || 0) + 1);
+      }
+      let best = null, bestCount = -1;
+      counts.forEach((count, midi) => { if (count > bestCount) { bestCount = count; best = midi; } });
+      seg.midi = best;
     });
-    return notes;
+
+    // Neighbours that settled on the same pitch rejoin — unless an attack
+    // separates them, which is what keeps a repeated note two notes.
+    const merged = [];
+    kept.forEach((seg) => {
+      const last = merged[merged.length - 1];
+      if (last && last.midi === seg.midi && !seg.onset) { last.end = seg.end; return; }
+      merged.push(seg);
+    });
+
+    return merged.filter((seg) => seg.midi != null).map((seg) => ({
+      midi: seg.midi,
+      startMs: frames[seg.start].t,
+      durMs: edgeMs(seg.end) - frames[seg.start].t,
+    }));
   }
 
   // Krumhansl-Schmuckler key profiles: how strongly each scale degree is
@@ -1579,6 +1653,18 @@
     const octaveShift = Math.floor(targetIdx / scale.length);
     const wrapped = ((targetIdx % scale.length) + scale.length) % scale.length;
     return midi - scale[idx] + scale[wrapped] + 12 * octaveShift;
+  }
+
+  // Compact interval tag between a melody note and its harmony note, so you can
+  // see WHAT the smart harmoniser chose (it varies note to note by design).
+  const SHORT_INTERVALS = ['1', 'm2', 'M2', 'm3', 'M3', 'P4', 'TT', 'P5', 'm6', 'M6', 'm7', 'M7'];
+  function intervalTag(melodyMidi, harmonyMidi) {
+    const delta = harmonyMidi - melodyMidi;
+    const gap = Math.abs(delta);
+    if (gap === 0) return 'unison';
+    const arrow = delta > 0 ? '↑' : '↓';
+    if (gap === 12) return arrow + '8ve';
+    return arrow + SHORT_INTERVALS[gap % 12] + (gap > 12 ? '+8' : '');
   }
 
   function harmonyStyle() {
@@ -1778,9 +1864,13 @@
       const harm = document.createElement('span');
       harm.className = 'chip-harm';
       harm.textContent = takeHarmony[i] != null ? noteName(takeHarmony[i]) : '';
+      const interval = document.createElement('span');
+      interval.className = 'chip-interval';
+      interval.textContent = takeHarmony[i] != null ? intervalTag(n.midi, takeHarmony[i]) : '';
       chip.appendChild(lyric);
       chip.appendChild(main);
       chip.appendChild(harm);
+      chip.appendChild(interval);
       chip.addEventListener('click', () => selectNote(i));
       wrap.appendChild(chip);
     });
@@ -1844,6 +1934,7 @@
 
   function finishTake() {
     takeNotes = segmentFrames(recFrames);
+    window.__DEBUG_TAKE = { frames: recFrames, notes: takeNotes }; // console/test inspection hook
     selectedNoteIndex = null;
     // Speech recognition on singing is unreliable, so treat anything it heard as
     // a rough first draft the singer corrects, never as the source of truth.
@@ -1871,6 +1962,8 @@
   function stopTakePlayback() {
     takeTimers.forEach((t) => clearTimeout(t));
     takeTimers = [];
+    takeVoices.forEach(stopVoice); // notes are scheduled ahead, so cancel them too
+    takeVoices = [];
     takePlaying = false;
     highlightChip(null);
   }
@@ -1878,28 +1971,37 @@
   // Plays the take back on the piano in the rhythm it was sung. `mode` picks
   // which line you hear: the melody as sung, the harmony line on its own (useful
   // for learning your part), or both together.
+  const NOTE_TAIL_SEC = 0.12;           // let a note ring just past its sung length
+  const MIN_RING_SEC = 0.22;            // ...but never so briefly that it clicks
+
   function playTake(mode) {
     if (!takeNotes.length) return;
     stopTakePlayback();
     ensureAudio();
     takePlaying = true;
-    const startMs = takeNotes[0].startMs;
+    const originMs = takeNotes[0].startMs;
+    const nowCtx = audioCtx.currentTime;
+    const audioStart = nowCtx + 0.08;   // brief lead-in so the first note isn't clipped
+    let lastEnd = audioStart;
+
     takeNotes.forEach((n, i) => {
-      takeTimers.push(setTimeout(() => {
-        // Alone, a line carries the tune and gets full level; together, the
-        // harmony sits slightly under the melody.
-        if (mode !== 'harmony') startVoice(n.midi, 0.26);
-        if (mode !== 'melody' && takeHarmony[i] != null) {
-          startVoice(takeHarmony[i], mode === 'harmony' ? 0.26 : 0.2);
-        }
-        highlightChip(i, mode);
-      }, n.startMs - startMs));
+      const at = audioStart + (n.startMs - originMs) / 1000;
+      const until = at + Math.max(MIN_RING_SEC, n.durMs / 1000 + NOTE_TAIL_SEC);
+      lastEnd = Math.max(lastEnd, until);
+      // Alone, a line carries the tune and gets full level; together, the
+      // harmony sits slightly under the melody.
+      if (mode !== 'harmony') takeVoices.push(startVoice(n.midi, 0.26, false, at, until));
+      if (mode !== 'melody' && takeHarmony[i] != null) {
+        takeVoices.push(startVoice(takeHarmony[i], mode === 'harmony' ? 0.26 : 0.2, false, at, until));
+      }
+      // Only the highlight rides on setTimeout; the audio itself is scheduled.
+      takeTimers.push(setTimeout(() => highlightChip(i, mode), (at - nowCtx) * 1000));
     });
-    const last = takeNotes[takeNotes.length - 1];
+
     takeTimers.push(setTimeout(() => {
       takePlaying = false;
       highlightChip(null);
-    }, last.startMs - startMs + last.durMs));
+    }, (lastEnd - nowCtx) * 1000));
   }
 
   function initPlayControls() {
