@@ -210,6 +210,10 @@
   }
   .back-link:active { color: var(--text); }
   .prompt { text-align: center; font-size: 16px; font-weight: 700; min-height: 22px; }
+  .round-key {
+    text-align: center; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--accent); min-height: 14px; margin-top: 2px;
+  }
 
   /* Practice run screen: base note on the left, a live vertical waveform on the
      right that reacts to the mic input and is colored by pitch accuracy. */
@@ -457,6 +461,7 @@
 
       <div class="card">
         <div class="prompt" id="practicePrompt">Press "New round" to begin.</div>
+        <div class="round-key" id="roundKey"></div>
         <div class="sing-row">
           <div class="base-col">
             <div class="np-label">Base</div>
@@ -1034,6 +1039,14 @@
     { semitones: 8, name: 'Minor 6th', short: 'Min 6th' },
     { semitones: 9, name: 'Major 6th', short: 'Maj 6th' },
   ];
+  // Practice asks for a scale degree, not a fixed semitone count: a "3rd above"
+  // in the round's key is major or minor depending on which degree the base note
+  // sits on, which is what actually makes a harmony line stay in key.
+  const PRACTICE_DEGREES = [
+    { steps: 2, name: '3rd' },
+    { steps: 4, name: '5th' },
+    { steps: 5, name: '6th' },
+  ];
   const INTERVAL_INFO = {};
   HARMONY_INTERVALS.forEach((iv) => {
     INTERVAL_INFO[iv.semitones] = `${iv.name} above`;
@@ -1046,6 +1059,17 @@
         fn(iv.semitones * dir, `${iv.short} ${dir > 0 ? '↑' : '↓'}`, `${iv.name} ${dir > 0 ? 'above' : 'below'}`);
       });
     });
+  }
+  function eachDegreeCell(fn) {
+    PRACTICE_DEGREES.forEach((d) => {
+      [1, -1].forEach((dir) => {
+        fn(d.steps * dir, `${d.name} ${dir > 0 ? '↑' : '↓'}`, `${d.name} ${dir > 0 ? 'above' : 'below'}`);
+      });
+    });
+  }
+  function degreeLabel(signedSteps) {
+    const d = PRACTICE_DEGREES.find((x) => x.steps === Math.abs(signedSteps));
+    return d ? `${d.name} ${signedSteps > 0 ? 'above' : 'below'}` : '';
   }
   function directionHeaders(parent) {
     ['Above', 'Below'].forEach((text) => {
@@ -1065,6 +1089,12 @@
   // Direction matters: folding the gap into a pitch class turned a 4th BELOW
   // into "Perfect 5th" (7 semitones up = 5 semitones down, mod 12), which told
   // a singer they were on the right interval while they were a step off.
+  // Quality only, no direction — for when the sentence already says above/below.
+  function intervalQualityName(semitones) {
+    const gap = Math.abs(semitones);
+    if (gap === 0) return 'unison';
+    return gap % 12 === 0 ? 'Octave' : GENERIC_INTERVAL_NAMES[gap % 12];
+  }
   function intervalNameFromSemitones(semitones) {
     if (semitones === 0) return null;              // unison isn't an interval worth naming
     const gap = Math.abs(semitones);
@@ -1075,10 +1105,12 @@
   let practiceScaleType = 'major';
   let practiceRangeStartOctave = 3;
   const enabledKeys = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-  const enabledIntervals = new Set();
-  HARMONY_INTERVALS.forEach((iv) => { enabledIntervals.add(iv.semitones); enabledIntervals.add(-iv.semitones); });
+  const enabledIntervals = new Set();   // signed scale steps: +2 = a 3rd above, -4 = a 5th below
+  PRACTICE_DEGREES.forEach((d) => { enabledIntervals.add(d.steps); enabledIntervals.add(-d.steps); });
+  let practiceKey = null;               // {root, type} the current round is drawn from
   let practiceBaseMidi = null;
   let practiceTargetMidi = null;
+  let practiceSteps = 0;                // signed scale steps asked for this round
   let lastDetectedMidi = null;
   let streak = 0;
 
@@ -1106,7 +1138,7 @@
     const grid = document.getElementById('intervalToggleGrid');
     grid.innerHTML = '';
     directionHeaders(grid);
-    eachIntervalCell((offset, short) => {
+    eachDegreeCell((offset, short) => {
       const btn = document.createElement('button');
       btn.className = 'toggle-btn' + (enabledIntervals.has(offset) ? ' active' : '');
       btn.dataset.offset = offset;
@@ -1168,8 +1200,13 @@
     const octave = practiceRangeStartOctave + Math.floor(Math.random() * 2);
 
     practiceBaseMidi = 12 * (octave + 1) + pc;
-    const targetOffset = intervalsPool[Math.floor(Math.random() * intervalsPool.length)];
-    practiceTargetMidi = practiceBaseMidi + targetOffset;
+    practiceKey = { root: root, type: practiceScaleType };
+    // The target is the diatonic note that many scale steps away, so its quality
+    // follows the key: a 3rd above C in C major is E (major), but a 3rd above D
+    // in the same key is F (minor).
+    practiceSteps = intervalsPool[Math.floor(Math.random() * intervalsPool.length)];
+    practiceTargetMidi = diatonicHarmony(practiceBaseMidi, practiceKey, practiceSteps);
+    window.__PRACTICE_SEMIS = practiceTargetMidi - practiceBaseMidi; // test/console inspection
 
     roundSolved = false;
     correctHoldStart = null;
@@ -1178,7 +1215,9 @@
     lastDetectedMidi = null;
 
     document.getElementById('pBaseNote').textContent = noteName(practiceBaseMidi);
-    document.getElementById('practicePrompt').textContent = `Sing: ${INTERVAL_INFO[targetOffset]}`;
+    document.getElementById('practicePrompt').textContent = `Sing: ${degreeLabel(practiceSteps)}`;
+    document.getElementById('roundKey').textContent =
+      `in ${NOTE_NAMES[practiceKey.root]} ${practiceKey.type === 'major' ? 'major' : 'minor'}`;
     const fb = document.getElementById('practiceFeedback');
     fb.textContent = '';
     fb.className = 'feedback';
@@ -1198,8 +1237,14 @@
   let listening = false, timeDomainBuf = null;
   let correctHoldStart = null, roundSolved = false;
   let wrongHoldStart = null, wrongHoldMidi = null;
+  let lastCents = 0;                    // signed cents from the target, for tuning feedback
   const WRONG_HINT_MS = 900;            // hold a wrong note this long and we say what's off
-  const CENTS_TOLERANCE = 25;
+  // Half a semitone is 50 cents, so this accepts anything that rounds to the
+  // right note. A stricter band graded you wrong while the readout showed the
+  // right note name — the app contradicting itself. Intonation is still
+  // reported back on success rather than being a pass/fail gate.
+  const CENTS_TOLERANCE = 45;
+  const CENTS_SPOT_ON = 15;
   const CORRECT_HOLD_MS = 400;
 
   // Standard autocorrelation pitch detector (ACF2+): finds the lag at which the
@@ -1280,12 +1325,23 @@
 
   function showIntervalHint(sungMidi) {
     if (practiceBaseMidi == null || practiceTargetMidi == null) return;
+    const fbEl = document.getElementById('practiceFeedback');
+    // Same note, just not in tune enough to score: say THAT, rather than
+    // "you want the interval you are already singing".
+    const sungPc = ((sungMidi % 12) + 12) % 12;
+    const targetPc = ((practiceTargetMidi % 12) + 12) % 12;
+    if (sungPc === targetPc) {
+      fbEl.textContent = `${noteName(sungMidi)} is the right note — you're a bit ` +
+        `${lastCents > 0 ? 'sharp, ease down' : 'flat, ease up'}`;
+      fbEl.className = 'feedback nudge';
+      return;
+    }
     const sung = intervalNameFromSemitones(sungMidi - practiceBaseMidi);
-    const wanted = INTERVAL_INFO[practiceTargetMidi - practiceBaseMidi];
+    const wanted = intervalQualityName(practiceTargetMidi - practiceBaseMidi);
     const fb = document.getElementById('practiceFeedback');
     fb.textContent = sung
-      ? `That's a ${sung} — you want the ${wanted} (${noteName(practiceTargetMidi)})`
-      : `That's the base note — you want the ${wanted} (${noteName(practiceTargetMidi)})`;
+      ? `That's a ${sung} — in this key the ${degreeLabel(practiceSteps)} is a ${wanted} (${noteName(practiceTargetMidi)})`
+      : `That's the base note — in this key the ${degreeLabel(practiceSteps)} is a ${wanted} (${noteName(practiceTargetMidi)})`;
     fb.className = 'feedback nudge';
   }
 
@@ -1294,7 +1350,11 @@
     streak++;
     document.getElementById('streakDisplay').textContent = `Streak: ${streak}`;
     const fb = document.getElementById('practiceFeedback');
-    fb.textContent = `✅ Correct! That was ${noteName(practiceTargetMidi)}.`;
+    const tuning = Math.abs(lastCents) <= CENTS_SPOT_ON
+      ? 'spot on'
+      : `a little ${lastCents > 0 ? 'sharp' : 'flat'}`;
+    fb.textContent = `✅ Correct! ${noteName(practiceTargetMidi)} — a ` +
+      `${intervalNameFromSemitones(practiceTargetMidi - practiceBaseMidi)} in this key (${tuning}).`;
     fb.className = 'feedback correct';
     pausePitchDetection(); // stop listening/updating until the next round
   }
@@ -1337,6 +1397,7 @@
     let close = false;
     if (practiceTargetMidi != null) {
       const cents = centsFromTarget(freq, practiceTargetMidi);
+      lastCents = cents;
       close = Math.abs(cents) <= CENTS_TOLERANCE;
       if (close && !roundSolved) {
         if (correctHoldStart == null) correctHoldStart = performance.now();
