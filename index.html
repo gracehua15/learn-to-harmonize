@@ -230,6 +230,40 @@
   .mic-error { text-align: center; font-size: 12px; color: #ff9a9a; margin-top: 10px; }
   .streak { text-align: center; font-size: 13px; color: var(--muted); margin-top: 8px; }
 
+  /* Play: sing a melody, transcribe it, harmonize it */
+  .rec-btn.recording {
+    background: linear-gradient(135deg, #ff5964, #b6293a);
+    color: #fff2f2; border-color: transparent;
+  }
+  .rec-meta {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 12px; margin-top: 10px; font-size: 12px; color: var(--muted);
+  }
+  .rec-live {
+    font-size: 15px; font-weight: 800; color: var(--accent2);
+    font-variant-numeric: tabular-nums;
+  }
+  .key-badge {
+    float: right; font-size: 11px; font-weight: 700; color: var(--accent);
+    background: var(--card2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 10px;
+  }
+  .note-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .note-chip {
+    display: flex; flex-direction: column; align-items: center; gap: 1px;
+    min-width: 52px; padding: 7px 8px;
+    border-radius: 9px; border: 1px solid var(--border); background: var(--card2);
+    font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
+    transition: background 0.1s, color 0.1s, border-color 0.1s;
+  }
+  .note-chip .chip-harm { font-size: 10px; font-weight: 700; color: var(--harm-color); min-height: 13px; }
+  .note-chip.active {
+    background: linear-gradient(135deg, var(--base-color), #1fa971);
+    border-color: transparent; color: #06210f;
+  }
+  .note-chip.active .chip-harm { color: #2a1a00; }
+  .play-buttons { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+
   .file-warning {
     background: #3a1414; border: 1px solid #7a2b2b; color: #ffd7d7;
     border-radius: 12px; padding: 12px 14px; font-size: 12.5px; line-height: 1.5;
@@ -261,6 +295,7 @@
   <div class="tabs">
     <div class="tab active" data-view="learn">Learn</div>
     <div class="tab" data-view="practice">Practice</div>
+    <div class="tab" data-view="play">Play</div>
     <div class="tab soon">Quiz</div>
   </div>
 
@@ -397,6 +432,45 @@
         <button class="big-btn" id="newRoundBtn">New round</button>
         <div class="streak" id="streakDisplay">Streak: 0</div>
       </div>
+    </div>
+  </div>
+
+  <div id="playView" hidden>
+    <div class="card">
+      <div class="grid-title">Sing a melody — it gets written out as piano notes, played back, and harmonized</div>
+      <button class="big-btn rec-btn" id="recordBtn">● Record</button>
+      <div class="rec-meta">
+        <span id="recStatus">Ready when you are</span>
+        <span class="rec-live" id="recLiveNote"></span>
+      </div>
+      <div class="mic-error" id="recError" hidden></div>
+    </div>
+
+    <div class="card" id="transcriptCard" hidden>
+      <div class="grid-title">
+        What you sang
+        <span class="key-badge" id="detectedKey"></span>
+      </div>
+      <div class="note-chips" id="noteChips"></div>
+    </div>
+
+    <div class="card" id="playbackCard" hidden>
+      <div class="controls">
+        <div class="field">
+          <label for="harmonySelect">Harmony line</label>
+          <select id="harmonySelect">
+            <option value="2" selected>3rd above</option>
+            <option value="-2">3rd below</option>
+            <option value="5">6th above</option>
+            <option value="-5">6th below</option>
+          </select>
+        </div>
+      </div>
+      <div class="play-buttons">
+        <button class="big-btn" id="playMelodyBtn">▶ Play melody</button>
+        <button class="big-btn start-btn" id="playHarmonyBtn">▶ Play with harmony</button>
+      </div>
+      <button class="back-link" id="clearTakeBtn">↺ Record a new take</button>
     </div>
   </div>
 
@@ -832,9 +906,11 @@
   function switchView(view) {
     document.getElementById('learnView').hidden = view !== 'learn';
     document.getElementById('practiceView').hidden = view !== 'practice';
+    document.getElementById('playView').hidden = view !== 'play';
     document.querySelectorAll('.tab[data-view]').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
     if (view !== 'learn') stopEverything(); // don't leave Learn's base/harmony notes sounding in the background
     if (view !== 'practice') stopListening(); // release the mic once it's off-screen
+    if (view !== 'play') { stopRecording(); stopTakePlayback(); } // same for Play's mic + playback
   }
   function initTabs() {
     document.querySelectorAll('.tab[data-view]').forEach((t) => {
@@ -1190,6 +1266,252 @@
     lastDetectedMidi = null;
   }
 
+  // ---- play: sing a melody, transcribe it, harmonize it ----
+  // Records sung pitch frames off the mic, segments them into discrete notes,
+  // guesses the key those notes sit in, and harmonizes each note with a
+  // diatonic interval so the harmony line stays in that key throughout.
+  const REC_FRAME_MS = 40;              // pitch sampled this often while recording
+  const MIN_NOTE_MS = 120;              // shorter runs are glide/noise, not notes
+  const MAX_TAKE_MS = 30000;            // hard cap on one take
+  let recStream = null, recSource = null, recAnalyser = null, recIntervalId = null;
+  let recBuf = null, recording = false, recFrames = [], recStartedAt = 0;
+  let takeNotes = [];                   // [{midi, startMs, durMs}]
+  let takeKey = null;                   // {root, type}
+  let takeTimers = [], takePlaying = false;
+
+  function setRecStatus(text) {
+    const el = document.getElementById('recStatus');
+    if (el) el.textContent = text;
+  }
+
+  function startRecording() {
+    navigator.mediaDevices.getUserMedia({
+      audio: { echoCancellation: false, noiseSuppression: false, autoGainControl: false },
+    }).then((stream) => {
+      ensureAudio();
+      stopTakePlayback();
+      recStream = stream;
+      recSource = audioCtx.createMediaStreamSource(stream);
+      recAnalyser = audioCtx.createAnalyser();
+      recAnalyser.fftSize = 2048;
+      recSource.connect(recAnalyser);
+      recFrames = [];
+      recording = true;
+      recStartedAt = performance.now();
+      document.getElementById('recError').hidden = true;
+      document.getElementById('recordBtn').classList.add('recording');
+      document.getElementById('recordBtn').textContent = '■ Stop';
+      setRecStatus('Recording — sing your melody');
+      recIntervalId = setInterval(recordTick, REC_FRAME_MS);
+    }).catch((err) => {
+      const el = document.getElementById('recError');
+      el.hidden = false;
+      el.textContent = err && err.name === 'NotAllowedError'
+        ? 'Microphone access was denied — check your browser/site permissions and try again.'
+        : `Could not access the microphone (${err && err.message ? err.message : 'unknown error'}).`;
+    });
+  }
+
+  function recordTick() {
+    if (!recAnalyser) return;
+    if (!recBuf || recBuf.length !== recAnalyser.fftSize) recBuf = new Float32Array(recAnalyser.fftSize);
+    recAnalyser.getFloatTimeDomainData(recBuf);
+    const freq = autoCorrelate(recBuf, audioCtx.sampleRate);
+    const midi = freq === -1 ? null : Math.round(69 + 12 * Math.log2(freq / 440));
+    recFrames.push(midi);
+    document.getElementById('recLiveNote').textContent = midi == null ? '' : noteName(midi);
+    const elapsed = performance.now() - recStartedAt;
+    setRecStatus(`Recording — ${(elapsed / 1000).toFixed(1)}s`);
+    if (elapsed >= MAX_TAKE_MS) stopRecording();
+  }
+
+  function stopRecording() {
+    if (!recording && !recStream) return;
+    recording = false;
+    if (recIntervalId) { clearInterval(recIntervalId); recIntervalId = null; }
+    if (recStream) { recStream.getTracks().forEach((t) => t.stop()); recStream = null; }
+    if (recSource) { try { recSource.disconnect(); } catch (e) {} recSource = null; }
+    recAnalyser = null;
+    const btn = document.getElementById('recordBtn');
+    if (btn) { btn.classList.remove('recording'); btn.textContent = '● Record'; }
+    document.getElementById('recLiveNote').textContent = '';
+    finishTake();
+  }
+
+  // Run-length encode the per-frame pitches, drop runs too short to be real
+  // notes (vibrato wobble, octave glitches, consonants), and turn what's left
+  // into timed notes. Nulls are silence and become gaps rather than notes.
+  function segmentFrames(frames) {
+    const runs = [];
+    frames.forEach((midi) => {
+      const last = runs[runs.length - 1];
+      if (last && last.midi === midi) last.count++;
+      else runs.push({ midi: midi, count: 1 });
+    });
+
+    const minFrames = Math.max(2, Math.round(MIN_NOTE_MS / REC_FRAME_MS));
+    const merged = [];
+    runs.forEach((run) => {
+      const last = merged[merged.length - 1];
+      if (run.count < minFrames) {
+        if (last) last.count += run.count; // absorb the blip into whatever came before
+        return;
+      }
+      if (last && last.midi === run.midi) last.count += run.count;
+      else merged.push({ midi: run.midi, count: run.count });
+    });
+
+    const notes = [];
+    let cursorMs = 0;
+    merged.forEach((run) => {
+      const durMs = run.count * REC_FRAME_MS;
+      if (run.midi != null) notes.push({ midi: run.midi, startMs: cursorMs, durMs: durMs });
+      cursorMs += durMs;
+    });
+    return notes;
+  }
+
+  // Score every major/minor key by how much of the sung duration lands in it,
+  // penalising out-of-key notes, with a nudge toward keys whose tonic is sung a lot.
+  function detectKey(notes) {
+    if (!notes.length) return null;
+    const weights = new Array(12).fill(0);
+    notes.forEach((n) => { weights[((n.midi % 12) + 12) % 12] += n.durMs; });
+    let best = null;
+    for (let root = 0; root < 12; root++) {
+      Object.keys(SCALES).forEach((type) => {
+        const scale = SCALES[type];
+        let score = 0;
+        for (let pc = 0; pc < 12; pc++) {
+          const rel = ((pc - root) % 12 + 12) % 12;
+          score += scale.indexOf(rel) === -1 ? -weights[pc] * 0.6 : weights[pc];
+        }
+        score += weights[root] * 0.3; // tonic emphasis
+        if (!best || score > best.score) best = { root: root, type: type, score: score };
+      });
+    }
+    return best;
+  }
+
+  // Harmony note `steps` scale-degrees away from the melody note, inside the
+  // detected key — so a "3rd above" is major or minor as that degree requires,
+  // which is what keeps the line sounding right rather than mechanically parallel.
+  function diatonicHarmony(midi, key, steps) {
+    const scale = SCALES[key.type];
+    const rel = ((midi % 12) - key.root % 12 + 24) % 12;
+    let idx = scale.indexOf(rel);
+    if (idx === -1) { // sung note sits outside the key — snap to the nearest degree
+      let bestDiff = Infinity;
+      scale.forEach((s, i) => {
+        const diff = Math.abs(s - rel);
+        if (diff < bestDiff) { bestDiff = diff; idx = i; }
+      });
+    }
+    const targetIdx = idx + steps;
+    const octaveShift = Math.floor(targetIdx / scale.length);
+    const wrapped = ((targetIdx % scale.length) + scale.length) % scale.length;
+    return midi - scale[idx] + scale[wrapped] + 12 * octaveShift;
+  }
+
+  function harmonySteps() {
+    return parseInt(document.getElementById('harmonySelect').value, 10);
+  }
+
+  function renderTake() {
+    const wrap = document.getElementById('noteChips');
+    wrap.innerHTML = '';
+    const steps = harmonySteps();
+    takeNotes.forEach((n, i) => {
+      const chip = document.createElement('div');
+      chip.className = 'note-chip';
+      chip.dataset.index = i;
+      const main = document.createElement('span');
+      main.textContent = noteName(n.midi);
+      const harm = document.createElement('span');
+      harm.className = 'chip-harm';
+      harm.textContent = takeKey ? noteName(diatonicHarmony(n.midi, takeKey, steps)) : '';
+      chip.appendChild(main);
+      chip.appendChild(harm);
+      wrap.appendChild(chip);
+    });
+    const badge = document.getElementById('detectedKey');
+    badge.textContent = takeKey
+      ? `Key: ${NOTE_NAMES[takeKey.root]} ${takeKey.type === 'major' ? 'major' : 'minor'}`
+      : '';
+  }
+
+  function finishTake() {
+    takeNotes = segmentFrames(recFrames);
+    takeKey = detectKey(takeNotes);
+    const hasNotes = takeNotes.length > 0;
+    document.getElementById('transcriptCard').hidden = !hasNotes;
+    document.getElementById('playbackCard').hidden = !hasNotes;
+    if (!hasNotes) {
+      setRecStatus("Didn't catch any notes — try singing a bit louder or longer");
+      return;
+    }
+    renderTake();
+    setRecStatus(`Got ${takeNotes.length} note${takeNotes.length === 1 ? '' : 's'}`);
+  }
+
+  function highlightChip(index) {
+    document.querySelectorAll('#noteChips .note-chip.active').forEach((c) => c.classList.remove('active'));
+    if (index == null) return;
+    const el = document.querySelector(`#noteChips .note-chip[data-index="${index}"]`);
+    if (el) el.classList.add('active');
+  }
+
+  function stopTakePlayback() {
+    takeTimers.forEach((t) => clearTimeout(t));
+    takeTimers = [];
+    takePlaying = false;
+    highlightChip(null);
+  }
+
+  // Plays the take back on the piano in the rhythm it was sung, optionally
+  // doubling each note with its harmony.
+  function playTake(withHarmony) {
+    if (!takeNotes.length) return;
+    stopTakePlayback();
+    ensureAudio();
+    takePlaying = true;
+    const steps = harmonySteps();
+    const startMs = takeNotes[0].startMs;
+    takeNotes.forEach((n, i) => {
+      takeTimers.push(setTimeout(() => {
+        startVoice(n.midi, 0.26);
+        if (withHarmony && takeKey) startVoice(diatonicHarmony(n.midi, takeKey, steps), 0.2);
+        highlightChip(i);
+      }, n.startMs - startMs));
+    });
+    const last = takeNotes[takeNotes.length - 1];
+    takeTimers.push(setTimeout(() => {
+      takePlaying = false;
+      highlightChip(null);
+    }, last.startMs - startMs + last.durMs));
+  }
+
+  function initPlayControls() {
+    document.getElementById('recordBtn').addEventListener('click', () => {
+      if (recording) stopRecording();
+      else startRecording();
+    });
+    document.getElementById('playMelodyBtn').addEventListener('click', () => playTake(false));
+    document.getElementById('playHarmonyBtn').addEventListener('click', () => playTake(true));
+    document.getElementById('harmonySelect').addEventListener('change', () => {
+      stopTakePlayback();
+      renderTake(); // re-label the chips for the newly picked interval
+    });
+    document.getElementById('clearTakeBtn').addEventListener('click', () => {
+      stopTakePlayback();
+      takeNotes = [];
+      takeKey = null;
+      document.getElementById('transcriptCard').hidden = true;
+      document.getElementById('playbackCard').hidden = true;
+      setRecStatus('Ready when you are');
+    });
+  }
+
   // First tap anywhere on the page also unlocks audio, matching the on-screen hint —
   // not just the first note press.
   ['pointerdown', 'touchend'].forEach((evt) => {
@@ -1204,6 +1526,7 @@
   initKeyToggles();
   initIntervalToggles();
   initPracticeControls();
+  initPlayControls();
   clearWave();
 })();
 </script>
