@@ -173,6 +173,17 @@
   .toggle-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .toggle-grid.keys { grid-template-columns: repeat(6, 1fr); }
   .toggle-grid.intervals { grid-template-columns: repeat(2, 1fr); }
+  .mode-switch { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .mode-btn {
+    display: flex; flex-direction: column; gap: 4px; padding: 12px 10px;
+    border-radius: 10px; border: 1px solid var(--border); background: var(--card2);
+    color: var(--muted); font-size: 14px; font-weight: 800; text-align: left;
+  }
+  .mode-btn span { font-size: 10.5px; font-weight: 600; line-height: 1.35; opacity: 0.85; }
+  .mode-btn.active {
+    background: linear-gradient(135deg, var(--accent), #7c6bd6);
+    border-color: transparent; color: #14102a;
+  }
   .toggle-btn {
     padding: 12px 4px;
     border-radius: 10px;
@@ -422,6 +433,18 @@
   <div id="practiceView" hidden>
     <div id="practiceSetup">
       <div class="card">
+        <div class="grid-title">Exercise</div>
+        <div class="mode-switch" id="modeSwitch">
+          <button class="mode-btn active" data-mode="interval">
+            Intervals<span>sing a set interval — key doesn't matter</span>
+          </button>
+          <button class="mode-btn" data-mode="inkey">
+            In key<span>sing the degree — major or minor?</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="card">
         <div class="grid-title">Which keys to include</div>
         <div class="toggle-grid keys" id="keyToggleGrid"></div>
       </div>
@@ -447,7 +470,7 @@
       </div>
 
       <div class="card">
-        <div class="grid-title">Which intervals to practice</div>
+        <div class="grid-title" id="targetsTitle">Which intervals to practice</div>
         <div class="toggle-grid intervals" id="intervalToggleGrid"></div>
       </div>
 
@@ -1105,9 +1128,16 @@
   let practiceScaleType = 'major';
   let practiceRangeStartOctave = 3;
   const enabledKeys = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-  const enabledIntervals = new Set();   // signed scale steps: +2 = a 3rd above, -4 = a 5th below
-  PRACTICE_DEGREES.forEach((d) => { enabledIntervals.add(d.steps); enabledIntervals.add(-d.steps); });
+  // Two exercises, two pools. "interval" asks for a fixed interval and the key
+  // is irrelevant to the answer; "inkey" asks for a scale degree and the answer's
+  // quality depends on the key, which is the whole point of that drill.
+  let practiceMode = 'interval';
+  const enabledIntervals = new Set();   // semitones, e.g. 4 = major 3rd above
+  HARMONY_INTERVALS.forEach((iv) => { enabledIntervals.add(iv.semitones); enabledIntervals.add(-iv.semitones); });
+  const enabledDegrees = new Set();     // signed scale steps, e.g. +2 = a 3rd above
+  PRACTICE_DEGREES.forEach((d) => { enabledDegrees.add(d.steps); enabledDegrees.add(-d.steps); });
   let practiceKey = null;               // {root, type} the current round is drawn from
+  let practiceAskLabel = '';            // what this round asked for, for the feedback lines
   let practiceBaseMidi = null;
   let practiceTargetMidi = null;
   let practiceSteps = 0;                // signed scale steps asked for this round
@@ -1134,27 +1164,44 @@
     });
   }
 
-  function initIntervalToggles() {
+  function renderPracticeTargets() {
+    const inKey = practiceMode === 'inkey';
+    const pool = inKey ? enabledDegrees : enabledIntervals;
     const grid = document.getElementById('intervalToggleGrid');
     grid.innerHTML = '';
     directionHeaders(grid);
-    eachDegreeCell((offset, short) => {
+    (inKey ? eachDegreeCell : eachIntervalCell)((value, short) => {
       const btn = document.createElement('button');
-      btn.className = 'toggle-btn' + (enabledIntervals.has(offset) ? ' active' : '');
-      btn.dataset.offset = offset;
+      btn.className = 'toggle-btn' + (pool.has(value) ? ' active' : '');
+      btn.dataset.offset = value;
       btn.textContent = short;
       btn.addEventListener('click', () => {
-        if (enabledIntervals.has(offset)) {
-          if (enabledIntervals.size === 1) return; // always leave at least one interval enabled
-          enabledIntervals.delete(offset);
+        if (pool.has(value)) {
+          if (pool.size === 1) return; // always leave at least one enabled
+          pool.delete(value);
           btn.classList.remove('active');
         } else {
-          enabledIntervals.add(offset);
+          pool.add(value);
           btn.classList.add('active');
         }
       });
       grid.appendChild(btn);
     });
+    document.getElementById('targetsTitle').textContent =
+      inKey ? 'Which degrees to practice' : 'Which intervals to practice';
+  }
+
+  function initModeSwitch() {
+    document.querySelectorAll('#modeSwitch .mode-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        practiceMode = btn.dataset.mode;
+        document.querySelectorAll('#modeSwitch .mode-btn').forEach((b) => {
+          b.classList.toggle('active', b.dataset.mode === practiceMode);
+        });
+        renderPracticeTargets();
+      });
+    });
+    renderPracticeTargets();
   }
 
   function initPracticeControls() {
@@ -1186,7 +1233,6 @@
   // ---- practice: rounds ----
   function generateRound() {
     const keysPool = Array.from(enabledKeys);
-    const intervalsPool = Array.from(enabledIntervals);
     const root = keysPool[Math.floor(Math.random() * keysPool.length)]; // a key's tonic pitch class, 0-11
     const intervals = SCALES[practiceScaleType];
     const degree = intervals[Math.floor(Math.random() * intervals.length)]; // scale-degree interval, 0-11
@@ -1201,11 +1247,22 @@
 
     practiceBaseMidi = 12 * (octave + 1) + pc;
     practiceKey = { root: root, type: practiceScaleType };
-    // The target is the diatonic note that many scale steps away, so its quality
-    // follows the key: a 3rd above C in C major is E (major), but a 3rd above D
-    // in the same key is F (minor).
-    practiceSteps = intervalsPool[Math.floor(Math.random() * intervalsPool.length)];
-    practiceTargetMidi = diatonicHarmony(practiceBaseMidi, practiceKey, practiceSteps);
+    if (practiceMode === 'inkey') {
+      // The target is the diatonic note that many scale steps away, so its
+      // quality follows the key: a 3rd above C in C major is E (major), but a
+      // 3rd above D in the same key is F (minor).
+      const degrees = Array.from(enabledDegrees);
+      practiceSteps = degrees[Math.floor(Math.random() * degrees.length)];
+      practiceTargetMidi = diatonicHarmony(practiceBaseMidi, practiceKey, practiceSteps);
+      practiceAskLabel = degreeLabel(practiceSteps);
+    } else {
+      // A fixed interval: the same number of semitones whatever the key.
+      const offsets = Array.from(enabledIntervals);
+      const offset = offsets[Math.floor(Math.random() * offsets.length)];
+      practiceSteps = 0;
+      practiceTargetMidi = practiceBaseMidi + offset;
+      practiceAskLabel = INTERVAL_INFO[offset];
+    }
     window.__PRACTICE_SEMIS = practiceTargetMidi - practiceBaseMidi; // test/console inspection
 
     roundSolved = false;
@@ -1215,9 +1272,11 @@
     lastDetectedMidi = null;
 
     document.getElementById('pBaseNote').textContent = noteName(practiceBaseMidi);
-    document.getElementById('practicePrompt').textContent = `Sing: ${degreeLabel(practiceSteps)}`;
-    document.getElementById('roundKey').textContent =
-      `in ${NOTE_NAMES[practiceKey.root]} ${practiceKey.type === 'major' ? 'major' : 'minor'}`;
+    document.getElementById('practicePrompt').textContent = `Sing: ${practiceAskLabel}`;
+    // The key only decides the answer in the in-key drill, so only show it there.
+    document.getElementById('roundKey').textContent = practiceMode === 'inkey'
+      ? `in ${NOTE_NAMES[practiceKey.root]} ${practiceKey.type === 'major' ? 'major' : 'minor'}`
+      : '';
     const fb = document.getElementById('practiceFeedback');
     fb.textContent = '';
     fb.className = 'feedback';
@@ -1339,9 +1398,10 @@
     const sung = intervalNameFromSemitones(sungMidi - practiceBaseMidi);
     const wanted = intervalQualityName(practiceTargetMidi - practiceBaseMidi);
     const fb = document.getElementById('practiceFeedback');
-    fb.textContent = sung
-      ? `That's a ${sung} — in this key the ${degreeLabel(practiceSteps)} is a ${wanted} (${noteName(practiceTargetMidi)})`
-      : `That's the base note — in this key the ${degreeLabel(practiceSteps)} is a ${wanted} (${noteName(practiceTargetMidi)})`;
+    const want = practiceMode === 'inkey'
+      ? `in this key the ${practiceAskLabel} is a ${wanted} (${noteName(practiceTargetMidi)})`
+      : `you want the ${practiceAskLabel} (${noteName(practiceTargetMidi)})`;
+    fb.textContent = sung ? `That's a ${sung} — ${want}` : `That's the base note — ${want}`;
     fb.className = 'feedback nudge';
   }
 
@@ -1353,8 +1413,10 @@
     const tuning = Math.abs(lastCents) <= CENTS_SPOT_ON
       ? 'spot on'
       : `a little ${lastCents > 0 ? 'sharp' : 'flat'}`;
-    fb.textContent = `✅ Correct! ${noteName(practiceTargetMidi)} — a ` +
-      `${intervalNameFromSemitones(practiceTargetMidi - practiceBaseMidi)} in this key (${tuning}).`;
+    fb.textContent = practiceMode === 'inkey'
+      ? `✅ Correct! ${noteName(practiceTargetMidi)} — a ` +
+        `${intervalQualityName(practiceTargetMidi - practiceBaseMidi)} in this key (${tuning}).`
+      : `✅ Correct! ${noteName(practiceTargetMidi)} (${tuning}).`;
     fb.className = 'feedback correct';
     pausePitchDetection(); // stop listening/updating until the next round
   }
@@ -2294,7 +2356,7 @@
   initHarmonyButtons();
   rebuildAll();
   initKeyToggles();
-  initIntervalToggles();
+  initModeSwitch();
   initPracticeControls();
   initPlayControls();
   clearWave();
