@@ -171,8 +171,8 @@
 
   /* Practice: toggle grids (keys / intervals) */
   .toggle-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
-  .toggle-grid.keys { grid-template-columns: repeat(6, 1fr); }
   .toggle-grid.intervals { grid-template-columns: repeat(2, 1fr); }
+  .setup-error { color: #ff9a9a; font-size: 13px; font-weight: 700; text-align: center; margin-top: 10px; }
   .mode-switch { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .mode-btn {
     display: flex; flex-direction: column; gap: 4px; padding: 12px 10px;
@@ -445,11 +445,6 @@
       </div>
 
       <div class="card">
-        <div class="grid-title">Which keys to include</div>
-        <div class="toggle-grid keys" id="keyToggleGrid"></div>
-      </div>
-
-      <div class="card">
         <div class="controls">
           <div class="field">
             <label for="pScaleSelect">Scale</label>
@@ -476,6 +471,7 @@
 
       <div class="card">
         <button class="big-btn start-btn" id="startPracticeBtn">▶ Start practice</button>
+        <div class="setup-error" id="setupError" hidden></div>
       </div>
     </div>
 
@@ -1146,15 +1142,15 @@
   }
   let practiceScaleType = 'major';
   let practiceRangeStartOctave = 3;
-  const enabledKeys = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+  const ALL_KEY_PCS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]; // rounds always draw from every key
   // Two exercises, two pools. "interval" asks for a fixed interval and the key
   // is irrelevant to the answer; "inkey" asks for a scale degree and the answer's
   // quality depends on the key, which is the whole point of that drill.
   let practiceMode = 'interval';
+  // Both start empty: you choose what to drill rather than opting out of
+  // everything you don't want.
   const enabledIntervals = new Set();   // semitones, e.g. 4 = major 3rd above
-  HARMONY_INTERVALS.forEach((iv) => { enabledIntervals.add(iv.semitones); enabledIntervals.add(-iv.semitones); });
   const enabledDegrees = new Set();     // signed scale steps, e.g. +2 = a 3rd above
-  PRACTICE_DEGREES.forEach((d) => { enabledDegrees.add(d.steps); enabledDegrees.add(-d.steps); });
   let practiceKey = null;               // {root, type} the current round is drawn from
   let practiceAskLabel = '';            // what this round asked for, for the feedback lines
   let practiceBaseMidi = null;
@@ -1162,26 +1158,6 @@
   let practiceSteps = 0;                // signed scale steps asked for this round
   let lastDetectedMidi = null;
   let streak = 0;
-
-  function initKeyToggles() {
-    const wrap = document.getElementById('keyToggleGrid');
-    NOTE_NAMES.forEach((label, pc) => {
-      const btn = document.createElement('button');
-      btn.className = 'toggle-btn active';
-      btn.textContent = label;
-      btn.addEventListener('click', () => {
-        if (enabledKeys.has(pc)) {
-          if (enabledKeys.size === 1) return; // always leave at least one key enabled
-          enabledKeys.delete(pc);
-          btn.classList.remove('active');
-        } else {
-          enabledKeys.add(pc);
-          btn.classList.add('active');
-        }
-      });
-      wrap.appendChild(btn);
-    });
-  }
 
   function renderPracticeTargets() {
     const inKey = practiceMode === 'inkey';
@@ -1196,12 +1172,12 @@
       btn.textContent = short;
       btn.addEventListener('click', () => {
         if (pool.has(value)) {
-          if (pool.size === 1) return; // always leave at least one enabled
           pool.delete(value);
           btn.classList.remove('active');
         } else {
           pool.add(value);
           btn.classList.add('active');
+          document.getElementById('setupError').hidden = true;
         }
       });
       grid.appendChild(btn);
@@ -1214,6 +1190,7 @@
     document.querySelectorAll('#modeSwitch .mode-btn').forEach((btn) => {
       btn.addEventListener('click', () => {
         practiceMode = btn.dataset.mode;
+        document.getElementById('setupError').hidden = true;
         document.querySelectorAll('#modeSwitch .mode-btn').forEach((b) => {
           b.classList.toggle('active', b.dataset.mode === practiceMode);
         });
@@ -1236,6 +1213,16 @@
     document.getElementById('newRoundBtn').addEventListener('click', generateRound);
 
     document.getElementById('startPracticeBtn').addEventListener('click', () => {
+      const pool = practiceMode === 'inkey' ? enabledDegrees : enabledIntervals;
+      if (pool.size === 0) {
+        const err = document.getElementById('setupError');
+        err.textContent = practiceMode === 'inkey'
+          ? 'Pick at least one degree to practice.'
+          : 'Pick at least one interval to practice.';
+        err.hidden = false;
+        return;
+      }
+      document.getElementById('setupError').hidden = true;
       document.getElementById('practiceSetup').hidden = true;
       document.getElementById('practiceSession').hidden = false;
       clearWave();
@@ -1251,8 +1238,7 @@
 
   // ---- practice: rounds ----
   function generateRound() {
-    const keysPool = Array.from(enabledKeys);
-    const root = keysPool[Math.floor(Math.random() * keysPool.length)]; // a key's tonic pitch class, 0-11
+    const root = ALL_KEY_PCS[Math.floor(Math.random() * ALL_KEY_PCS.length)]; // a key's tonic pitch class, 0-11
     const intervals = SCALES[practiceScaleType];
     const degree = intervals[Math.floor(Math.random() * intervals.length)]; // scale-degree interval, 0-11
     // root+degree is folded back into a single pitch class first, THEN placed in a
@@ -2374,7 +2360,6 @@
   initControls();
   initHarmonyButtons();
   rebuildAll();
-  initKeyToggles();
   initModeSwitch();
   initPracticeControls();
   initPlayControls();
