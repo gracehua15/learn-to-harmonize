@@ -248,7 +248,26 @@
     background: var(--card2); border: 1px solid var(--border);
     border-radius: 999px; padding: 2px 10px;
   }
+  .lyric-label {
+    display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
+    color: var(--muted); margin-bottom: 6px;
+  }
+  .lyrics-input {
+    width: 100%; background: var(--card2); color: var(--text);
+    border: 1px solid var(--border); border-radius: 10px;
+    padding: 9px 11px; font-size: 14px; font-weight: 600;
+    font-family: inherit; user-select: text;
+  }
+  .lyrics-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .editor-lyric { margin-bottom: 8px; }
+  .lyric-hint { font-size: 11px; color: var(--harm-color); margin: 6px 0 10px; min-height: 14px; }
   .note-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip-lyric {
+    font-size: 10px; font-weight: 700; color: var(--accent2);
+    max-width: 62px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    min-height: 13px;
+  }
+  .note-chip.active .chip-lyric, .note-chip.active-harm .chip-lyric { color: #06210f; }
   .note-chip {
     display: flex; flex-direction: column; align-items: center; gap: 1px;
     min-width: 52px; padding: 7px 8px;
@@ -479,9 +498,15 @@
         <span class="key-badge" id="detectedKey"></span>
       </div>
       <div class="progression" id="progression"></div>
+      <label class="lyric-label" for="lyricsInput">Words — one syllable per note</label>
+      <input type="text" id="lyricsInput" class="lyrics-input"
+             placeholder="e.g. ba by ba by ohh" autocomplete="off" spellcheck="false">
+      <div class="lyric-hint" id="lyricHint"></div>
       <div class="note-chips" id="noteChips"></div>
       <div class="note-editor" id="noteEditor" hidden>
         <div class="editor-label">Off-tune? Nudge <strong id="editorNoteName"></strong></div>
+        <input type="text" id="editorLyric" class="lyrics-input editor-lyric"
+               placeholder="word for this note" autocomplete="off" spellcheck="false">
         <div class="editor-buttons">
           <button class="edit-btn" data-delta="-12">−8ve</button>
           <button class="edit-btn" data-delta="-1">♭ down</button>
@@ -1315,13 +1340,19 @@
   const MAX_TAKE_MS = 30000;            // hard cap on one take
   const ONSET_MIN_RMS = 0.02;           // ignore onset spikes in near-silence
   const ONSET_RATIO = 1.8;              // loudness jump that counts as a new attack
+  const FLUX_WINDOW = 10;               // frames of history for the adaptive flux threshold
+  const FLUX_RATIO = 1.8;               // spectral change vs recent average that counts as a syllable
+  const FLUX_MIN = 1.0;                 // floor, in mean dB change per bin
   let recStream = null, recSource = null, recAnalyser = null, recIntervalId = null;
   let recBuf = null, recording = false, recFrames = [], recStartedAt = 0;
+  let recSpec = null, recPrevSpec = null;
   let takeNotes = [];                   // [{midi, startMs, durMs}]
   let takeKey = null;                   // {root, type}
   let takeChords = [];                  // inferred chord per note
   let takeHarmony = [];                 // harmony midi per note
   let selectedNoteIndex = null;         // note currently open for editing
+  let takeLyrics = [];                  // one syllable per note, index-aligned
+  let speechWords = [], recognizer = null;
   let takeTimers = [], takePlaying = false;
 
   function setRecStatus(text) {
@@ -1341,6 +1372,7 @@
       recAnalyser.fftSize = 2048;
       recSource.connect(recAnalyser);
       recFrames = [];
+      recPrevSpec = null;
       recording = true;
       recStartedAt = performance.now();
       document.getElementById('recError').hidden = true;
@@ -1348,6 +1380,7 @@
       document.getElementById('recordBtn').textContent = '■ Stop';
       setRecStatus('Recording — sing your melody');
       recIntervalId = setInterval(recordTick, REC_FRAME_MS);
+      startSpeechCapture();
     }).catch((err) => {
       const el = document.getElementById('recError');
       el.hidden = false;
@@ -1364,18 +1397,68 @@
     let rms = 0;
     for (let i = 0; i < recBuf.length; i++) rms += recBuf[i] * recBuf[i];
     rms = Math.sqrt(rms / recBuf.length);
+
+    // Spectral flux: how much the spectrum changed since the last frame. A new
+    // syllable ("ba" -> "by") changes the vowel's formants even when the pitch
+    // and loudness hold steady, which a level-only onset detector cannot see.
+    if (!recSpec || recSpec.length !== recAnalyser.frequencyBinCount) {
+      recSpec = new Float32Array(recAnalyser.frequencyBinCount);
+      recPrevSpec = null;
+    }
+    recAnalyser.getFloatFrequencyData(recSpec);
+    let flux = 0;
+    if (recPrevSpec) {
+      for (let i = 0; i < recSpec.length; i++) {
+        const cur = recSpec[i] < -140 || !isFinite(recSpec[i]) ? -140 : recSpec[i];
+        const prev = recPrevSpec[i] < -140 || !isFinite(recPrevSpec[i]) ? -140 : recPrevSpec[i];
+        const diff = cur - prev;
+        if (diff > 0) flux += diff;         // rises only: onsets, not decays
+      }
+      flux /= recSpec.length;
+    }
+    if (!recPrevSpec) recPrevSpec = new Float32Array(recSpec.length);
+    recPrevSpec.set(recSpec);
+
     const freq = autoCorrelate(recBuf, audioCtx.sampleRate);
     const midi = freq === -1 ? null : Math.round(69 + 12 * Math.log2(freq / 440));
-    recFrames.push({ midi: midi, rms: rms });
+    recFrames.push({ midi: midi, rms: rms, flux: flux });
     document.getElementById('recLiveNote').textContent = midi == null ? '' : noteName(midi);
     const elapsed = performance.now() - recStartedAt;
     setRecStatus(`Recording — ${(elapsed / 1000).toFixed(1)}s`);
     if (elapsed >= MAX_TAKE_MS) stopRecording();
   }
 
+  // Best-effort lyric capture. Browser speech recognition is trained on speech,
+  // not singing, and Chrome exposes no per-word timings, so this can only offer
+  // a rough word list to be corrected by hand — never an alignment.
+  function startSpeechCapture() {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    speechWords = [];
+    if (!SR) return;
+    try {
+      recognizer = new SR();
+      recognizer.continuous = true;
+      recognizer.interimResults = false;
+      recognizer.lang = 'en-US';
+      recognizer.onresult = (event) => {
+        for (let i = event.resultIndex; i < event.results.length; i++) {
+          if (event.results[i].isFinal) speechWords.push(event.results[i][0].transcript.trim());
+        }
+      };
+      recognizer.onerror = () => {};
+      recognizer.start();
+    } catch (e) { recognizer = null; }
+  }
+  function stopSpeechCapture() {
+    if (!recognizer) return;
+    try { recognizer.stop(); } catch (e) {}
+    recognizer = null;
+  }
+
   function stopRecording() {
     if (!recording && !recStream) return;
     recording = false;
+    stopSpeechCapture();
     if (recIntervalId) { clearInterval(recIntervalId); recIntervalId = null; }
     if (recStream) { recStream.getTracks().forEach((t) => t.stop()); recStream = null; }
     if (recSource) { try { recSource.disconnect(); } catch (e) {} recSource = null; }
@@ -1393,11 +1476,21 @@
     // A re-sung note at the same pitch looks identical to one held note if you
     // only follow pitch, so use a loudness spike (a fresh attack) as an extra
     // note boundary.
-    const onsets = frames.map((f, i) => {
-      if (i < 3 || f.rms < ONSET_MIN_RMS) return false;
-      const prev = (frames[i - 1].rms + frames[i - 2].rms + frames[i - 3].rms) / 3;
-      return f.rms > Math.max(ONSET_MIN_RMS, prev * ONSET_RATIO);
-    });
+    const minGap = Math.max(2, Math.round(MIN_NOTE_MS / REC_FRAME_MS));
+    const onsets = new Array(frames.length).fill(false);
+    let lastOnset = -Infinity;
+    for (let i = 3; i < frames.length; i++) {
+      const f = frames[i];
+      if (f.rms < ONSET_MIN_RMS) continue;          // silence can't start a note
+      if (i - lastOnset < minGap) continue;         // one attack can't follow another instantly
+      const prevRms = (frames[i - 1].rms + frames[i - 2].rms + frames[i - 3].rms) / 3;
+      const loudJump = f.rms > Math.max(ONSET_MIN_RMS, prevRms * ONSET_RATIO);
+      let fluxSum = 0, fluxCount = 0;
+      for (let j = Math.max(0, i - FLUX_WINDOW); j < i; j++) { fluxSum += frames[j].flux || 0; fluxCount++; }
+      const meanFlux = fluxCount ? fluxSum / fluxCount : 0;
+      const newSyllable = (f.flux || 0) > Math.max(FLUX_MIN, meanFlux * FLUX_RATIO);
+      if (loudJump || newSyllable) { onsets[i] = true; lastOnset = i; }
+    }
 
     const runs = [];
     frames.forEach((f, i) => {
@@ -1649,6 +1742,27 @@
     }
   }
 
+  // Lyrics are stored one syllable per note, index-aligned with takeNotes, so
+  // editing or deleting a note keeps its word attached.
+  function parseSyllables(text) {
+    return text.split(/[\s-]+/).map((s) => s.trim()).filter(Boolean);
+  }
+  function setLyricsFromText(text) {
+    const syllables = parseSyllables(text);
+    takeLyrics = takeNotes.map((_, i) => syllables[i] || '');
+    const hint = document.getElementById('lyricHint');
+    if (syllables.length && syllables.length !== takeNotes.length) {
+      hint.textContent = `${syllables.length} syllable${syllables.length === 1 ? '' : 's'} for ` +
+        `${takeNotes.length} note${takeNotes.length === 1 ? '' : 's'} — ` +
+        (syllables.length > takeNotes.length ? 'extra words ignored' : 'later notes left blank');
+    } else {
+      hint.textContent = '';
+    }
+  }
+  function syncLyricsInput() {
+    document.getElementById('lyricsInput').value = takeLyrics.join(' ').trim();
+  }
+
   function renderTake() {
     const wrap = document.getElementById('noteChips');
     wrap.innerHTML = '';
@@ -1656,11 +1770,15 @@
       const chip = document.createElement('button');
       chip.className = 'note-chip' + (i === selectedNoteIndex ? ' selected' : '');
       chip.dataset.index = i;
+      const lyric = document.createElement('span');
+      lyric.className = 'chip-lyric';
+      lyric.textContent = takeLyrics[i] || '';
       const main = document.createElement('span');
       main.textContent = noteName(n.midi);
       const harm = document.createElement('span');
       harm.className = 'chip-harm';
       harm.textContent = takeHarmony[i] != null ? noteName(takeHarmony[i]) : '';
+      chip.appendChild(lyric);
       chip.appendChild(main);
       chip.appendChild(harm);
       chip.addEventListener('click', () => selectNote(i));
@@ -1684,6 +1802,7 @@
     if (selectedNoteIndex == null || !takeNotes[selectedNoteIndex]) { editor.hidden = true; return; }
     editor.hidden = false;
     document.getElementById('editorNoteName').textContent = noteName(takeNotes[selectedNoteIndex].midi);
+    document.getElementById('editorLyric').value = takeLyrics[selectedNoteIndex] || '';
   }
 
   function selectNote(index) {
@@ -1710,6 +1829,8 @@
   function deleteSelectedNote() {
     if (selectedNoteIndex == null) return;
     takeNotes.splice(selectedNoteIndex, 1);
+    takeLyrics.splice(selectedNoteIndex, 1); // the word goes with its note
+    syncLyricsInput();
     selectedNoteIndex = null;
     if (!takeNotes.length) {
       document.getElementById('transcriptCard').hidden = true;
@@ -1724,6 +1845,10 @@
   function finishTake() {
     takeNotes = segmentFrames(recFrames);
     selectedNoteIndex = null;
+    // Speech recognition on singing is unreliable, so treat anything it heard as
+    // a rough first draft the singer corrects, never as the source of truth.
+    setLyricsFromText(speechWords.join(' '));
+    syncLyricsInput();
     const hasNotes = takeNotes.length > 0;
     document.getElementById('transcriptCard').hidden = !hasNotes;
     document.getElementById('playbackCard').hidden = !hasNotes;
@@ -1799,13 +1924,27 @@
       startVoice(takeNotes[selectedNoteIndex].midi, 0.26);
     });
     document.getElementById('editorDeleteBtn').addEventListener('click', deleteSelectedNote);
+    document.getElementById('lyricsInput').addEventListener('input', (e) => {
+      setLyricsFromText(e.target.value);
+      renderTake();
+    });
+    document.getElementById('editorLyric').addEventListener('input', (e) => {
+      if (selectedNoteIndex == null) return;
+      takeLyrics[selectedNoteIndex] = parseSyllables(e.target.value)[0] || '';
+      syncLyricsInput();
+      const chip = document.querySelector(`#noteChips .note-chip[data-index="${selectedNoteIndex}"] .chip-lyric`);
+      if (chip) chip.textContent = takeLyrics[selectedNoteIndex]; // patch in place, don't steal focus
+    });
     document.getElementById('clearTakeBtn').addEventListener('click', () => {
       stopTakePlayback();
       takeNotes = [];
       takeKey = null;
       takeChords = [];
       takeHarmony = [];
+      takeLyrics = [];
       selectedNoteIndex = null;
+      document.getElementById('lyricsInput').value = '';
+      document.getElementById('lyricHint').textContent = '';
       document.getElementById('transcriptCard').hidden = true;
       document.getElementById('playbackCard').hidden = true;
       setRecStatus('Ready when you are');
