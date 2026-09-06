@@ -333,6 +333,22 @@
   .edit-btn:active { filter: brightness(1.15); }
   .edit-btn.danger { color: #ff9a9a; }
   .play-buttons { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
+  .editor-length { margin-top: 12px; }
+  .song-lines { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
+  .song-line {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    border-radius: 10px; border: 1px solid var(--border); background: var(--card2);
+  }
+  .song-line.editing { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(184,146,255,0.3); }
+  .song-line.playing { background: linear-gradient(135deg, var(--base-color), #1fa971); color: #06210f; }
+  .song-line .line-name { font-size: 13px; font-weight: 800; }
+  .song-line .line-meta { flex: 1; font-size: 11px; color: var(--muted); }
+  .song-line.playing .line-meta { color: #06210f; }
+  .song-line .line-btn {
+    background: none; border: none; color: var(--muted); font-size: 13px; font-weight: 700; padding: 2px 6px;
+  }
+  .song-line .line-btn.danger { color: #ff9a9a; }
+  .song-line.playing .line-btn { color: #06210f; }
 
   .file-warning {
     background: #3a1414; border: 1px solid #7a2b2b; color: #ffd7d7;
@@ -548,6 +564,11 @@
           <button class="edit-btn" id="editorPlayBtn">▶ Hear</button>
           <button class="edit-btn danger" id="editorDeleteBtn">✕ Remove</button>
         </div>
+        <div class="editor-label editor-length">Length <strong id="editorLength"></strong></div>
+        <div class="editor-buttons">
+          <button class="edit-btn" data-scale="0.75">◀ Shorter</button>
+          <button class="edit-btn" data-scale="1.3333">Longer ▶</button>
+        </div>
       </div>
     </div>
 
@@ -567,8 +588,15 @@
         <button class="big-btn" id="playMelodyBtn">▶ Melody only</button>
         <button class="big-btn" id="playHarmonyBtn">▶ Harmony only</button>
         <button class="big-btn start-btn" id="playBothBtn">▶ Play together</button>
+        <button class="big-btn" id="addLineBtn">＋ Add as line 1</button>
       </div>
       <button class="back-link" id="clearTakeBtn">↺ Record a new take</button>
+    </div>
+
+    <div class="card" id="songCard" hidden>
+      <div class="grid-title">Song — each line keeps its own key and harmony</div>
+      <div class="song-lines" id="songLines"></div>
+      <button class="big-btn start-btn" id="playSongBtn">▶ Play whole song</button>
     </div>
   </div>
 
@@ -1608,6 +1636,10 @@
   let takeLyrics = [];                  // one syllable per note, index-aligned
   let speechWords = [], recognizer = null;
   let takeTimers = [], takeVoices = [], takePlaying = false;
+  let songLines = [];                   // each: {notes, lyrics, key, chords, harmony, style}
+  let editingLineIndex = null;          // which line the take on screen belongs to, if any
+  const SONG_LINE_GAP_SEC = 0.45;       // breath between lines when playing the whole song
+  const MIN_EDIT_NOTE_MS = 90, MAX_EDIT_NOTE_MS = 4000;
 
   function setRecStatus(text) {
     const el = document.getElementById('recStatus');
@@ -2130,6 +2162,8 @@
       const chip = document.createElement('button');
       chip.className = 'note-chip' + (i === selectedNoteIndex ? ' selected' : '');
       chip.dataset.index = i;
+      // Wider chip = longer note, so edits to length read at a glance.
+      chip.style.minWidth = Math.round(Math.max(52, Math.min(150, 44 + n.durMs / 14))) + 'px';
       const lyric = document.createElement('span');
       lyric.className = 'chip-lyric';
       lyric.textContent = takeLyrics[i] || '';
@@ -2167,6 +2201,8 @@
     editor.hidden = false;
     document.getElementById('editorNoteName').textContent = noteName(takeNotes[selectedNoteIndex].midi);
     document.getElementById('editorLyric').value = takeLyrics[selectedNoteIndex] || '';
+    document.getElementById('editorLength').textContent =
+      (takeNotes[selectedNoteIndex].durMs / 1000).toFixed(2) + 's';
   }
 
   function selectNote(index) {
@@ -2188,6 +2224,24 @@
     startVoice(note.midi, 0.26);
     analyzeTake();
     renderTake();
+    saveCurrentLine();
+  }
+
+  // Stretch or squeeze one note. Everything after it shifts by the same amount,
+  // so the rests you actually sang are preserved instead of the next note being
+  // swallowed or a hole opening up.
+  function adjustSelectedLength(factor) {
+    if (selectedNoteIndex == null) return;
+    const note = takeNotes[selectedNoteIndex];
+    const next = Math.max(MIN_EDIT_NOTE_MS, Math.min(MAX_EDIT_NOTE_MS, Math.round(note.durMs * factor)));
+    const delta = next - note.durMs;
+    note.durMs = next;
+    for (let i = selectedNoteIndex + 1; i < takeNotes.length; i++) takeNotes[i].startMs += delta;
+    renderTake();
+    saveCurrentLine();
+    ensureAudio();
+    startVoice(note.midi, 0.26, false, audioCtx.currentTime,
+      audioCtx.currentTime + Math.max(MIN_RING_SEC, note.durMs / 1000 + NOTE_TAIL_SEC));
   }
 
   function deleteSelectedNote() {
@@ -2204,6 +2258,7 @@
     }
     analyzeTake();
     renderTake();
+    saveCurrentLine();
   }
 
   // Re-segments the take already recorded, so a different splitting setting can
@@ -2224,6 +2279,7 @@
     syncLyricsInput();
     analyzeTake();
     renderTake();
+    saveCurrentLine();
     setRecStatus(`Got ${takeNotes.length} note${takeNotes.length === 1 ? '' : 's'} — tap any note to fix it`);
   }
 
@@ -2231,6 +2287,7 @@
     takeNotes = segmentFrames(recFrames);
     window.__DEBUG_TAKE = { frames: recFrames, notes: takeNotes }; // console/test inspection hook
     selectedNoteIndex = null;
+    editingLineIndex = null;            // a new take isn't part of the song until added
     // Speech recognition on singing is unreliable, so treat anything it heard as
     // a rough first draft the singer corrects, never as the source of truth.
     setLyricsFromText(speechWords.join(' '));
@@ -2244,6 +2301,8 @@
     }
     analyzeTake();
     renderTake();
+    updateAddLineBtn();
+    renderSongList();
     setRecStatus(`Got ${takeNotes.length} note${takeNotes.length === 1 ? '' : 's'} — tap any note to fix it`);
   }
 
@@ -2261,6 +2320,7 @@
     takeVoices = [];
     takePlaying = false;
     highlightChip(null);
+    highlightSongLine(null);
   }
 
   // Plays the take back on the piano in the rhythm it was sung. `mode` picks
@@ -2299,6 +2359,152 @@
     }, (lastEnd - nowCtx) * 1000));
   }
 
+  // ---- play: a song is a list of lines, each analysed on its own ----
+  function captureTake() {
+    return {
+      notes: takeNotes.map((n) => ({ midi: n.midi, startMs: n.startMs, durMs: n.durMs })),
+      lyrics: takeLyrics.slice(),
+      key: takeKey ? { root: takeKey.root, type: takeKey.type } : null,
+      chords: takeChords.slice(),
+      harmony: takeHarmony.slice(),
+      style: harmonyStyle(),
+    };
+  }
+
+  function applyTake(line) {
+    takeNotes = line.notes.map((n) => ({ midi: n.midi, startMs: n.startMs, durMs: n.durMs }));
+    takeLyrics = line.lyrics.slice();
+    takeKey = line.key ? { root: line.key.root, type: line.key.type } : null;
+    takeChords = line.chords.slice();
+    takeHarmony = line.harmony.slice();
+    if (line.style) document.getElementById('harmonySelect').value = line.style;
+    selectedNoteIndex = null;
+    syncLyricsInput();
+    document.getElementById('transcriptCard').hidden = false;
+    document.getElementById('playbackCard').hidden = false;
+    renderTake();
+  }
+
+  // Any edit to a line already in the song writes straight back to it.
+  function saveCurrentLine() {
+    if (editingLineIndex == null || !songLines[editingLineIndex]) return;
+    songLines[editingLineIndex] = captureTake();
+    renderSongList();
+  }
+
+  function addCurrentAsLine() {
+    if (!takeNotes.length) return;
+    songLines.push(captureTake());
+    editingLineIndex = songLines.length - 1;
+    renderSongList();
+    updateAddLineBtn();
+  }
+
+  function updateAddLineBtn() {
+    const btn = document.getElementById('addLineBtn');
+    if (editingLineIndex != null) {
+      btn.textContent = `✓ Saved as line ${editingLineIndex + 1}`;
+      btn.disabled = true;
+    } else {
+      btn.textContent = `＋ Add as line ${songLines.length + 1}`;
+      btn.disabled = false;
+    }
+  }
+
+  function renderSongList() {
+    const wrap = document.getElementById('songLines');
+    document.getElementById('songCard').hidden = songLines.length === 0;
+    wrap.innerHTML = '';
+    songLines.forEach((line, i) => {
+      const row = document.createElement('div');
+      row.className = 'song-line' + (i === editingLineIndex ? ' editing' : '');
+      row.dataset.line = i;
+
+      const name = document.createElement('span');
+      name.className = 'line-name';
+      name.textContent = `Line ${i + 1}`;
+
+      const meta = document.createElement('span');
+      meta.className = 'line-meta';
+      const words = line.lyrics.filter(Boolean).join(' ');
+      const keyText = line.key ? `${NOTE_NAMES[line.key.root]} ${line.key.type}` : 'key unknown';
+      meta.textContent = `${line.notes.length} notes · ${keyText}${words ? ' · ' + words : ''}`;
+
+      const play = document.createElement('button');
+      play.className = 'line-btn';
+      play.textContent = '▶';
+      play.title = 'Play this line';
+      play.addEventListener('click', (e) => { e.stopPropagation(); playLines([line], 'both'); });
+
+      const edit = document.createElement('button');
+      edit.className = 'line-btn';
+      edit.textContent = 'Edit';
+      edit.addEventListener('click', (e) => {
+        e.stopPropagation();
+        stopTakePlayback();
+        editingLineIndex = i;
+        applyTake(line);
+        renderSongList();
+        updateAddLineBtn();
+      });
+
+      const del = document.createElement('button');
+      del.className = 'line-btn danger';
+      del.textContent = '✕';
+      del.addEventListener('click', (e) => {
+        e.stopPropagation();
+        songLines.splice(i, 1);
+        if (editingLineIndex === i) editingLineIndex = null;
+        else if (editingLineIndex != null && editingLineIndex > i) editingLineIndex--;
+        renderSongList();
+        updateAddLineBtn();
+      });
+
+      row.append(name, meta, play, edit, del);
+      wrap.appendChild(row);
+    });
+  }
+
+  // Shared scheduler: plays a list of lines back to back on the audio clock,
+  // each with its own harmony, with a breath between them.
+  function playLines(lines, mode) {
+    const playable = lines.filter((l) => l.notes.length);
+    if (!playable.length) return;
+    stopTakePlayback();
+    ensureAudio();
+    takePlaying = true;
+    const nowCtx = audioCtx.currentTime;
+    let cursor = nowCtx + 0.08;
+    playable.forEach((line) => {
+      const origin = line.notes[0].startMs;
+      const lineIndex = songLines.indexOf(line);
+      if (lineIndex !== -1) {
+        takeTimers.push(setTimeout(() => highlightSongLine(lineIndex), (cursor - nowCtx) * 1000));
+      }
+      line.notes.forEach((n, i) => {
+        const at = cursor + (n.startMs - origin) / 1000;
+        const until = at + Math.max(MIN_RING_SEC, n.durMs / 1000 + NOTE_TAIL_SEC);
+        if (mode !== 'harmony') takeVoices.push(startVoice(n.midi, 0.26, false, at, until));
+        if (mode !== 'melody' && line.harmony[i] != null) {
+          takeVoices.push(startVoice(line.harmony[i], mode === 'harmony' ? 0.26 : 0.2, false, at, until));
+        }
+      });
+      const last = line.notes[line.notes.length - 1];
+      cursor += (last.startMs - origin + last.durMs) / 1000 + SONG_LINE_GAP_SEC;
+    });
+    takeTimers.push(setTimeout(() => {
+      takePlaying = false;
+      highlightSongLine(null);
+      highlightChip(null);
+    }, (cursor - nowCtx) * 1000));
+  }
+
+  function highlightSongLine(index) {
+    document.querySelectorAll('#songLines .song-line').forEach((row) => {
+      row.classList.toggle('playing', index != null && Number(row.dataset.line) === index);
+    });
+  }
+
   function initPlayControls() {
     document.getElementById('recordBtn').addEventListener('click', () => {
       if (recording) stopRecording();
@@ -2311,6 +2517,7 @@
       stopTakePlayback();
       analyzeTake();
       renderTake();
+      saveCurrentLine();
     });
     document.querySelectorAll('#noteEditor .edit-btn[data-delta]').forEach((btn) => {
       btn.addEventListener('click', () => adjustSelectedNote(parseInt(btn.dataset.delta, 10)));
@@ -2321,15 +2528,22 @@
       startVoice(takeNotes[selectedNoteIndex].midi, 0.26);
     });
     document.getElementById('editorDeleteBtn').addEventListener('click', deleteSelectedNote);
+    document.querySelectorAll('#noteEditor .edit-btn[data-scale]').forEach((btn) => {
+      btn.addEventListener('click', () => adjustSelectedLength(parseFloat(btn.dataset.scale)));
+    });
+    document.getElementById('addLineBtn').addEventListener('click', addCurrentAsLine);
+    document.getElementById('playSongBtn').addEventListener('click', () => playLines(songLines, 'both'));
     document.getElementById('sensitivitySelect').addEventListener('change', resegmentTake);
     document.getElementById('lyricsInput').addEventListener('input', (e) => {
       setLyricsFromText(e.target.value);
       renderTake();
+      saveCurrentLine();
     });
     document.getElementById('editorLyric').addEventListener('input', (e) => {
       if (selectedNoteIndex == null) return;
       takeLyrics[selectedNoteIndex] = parseSyllables(e.target.value)[0] || '';
       syncLyricsInput();
+      saveCurrentLine();
       const chip = document.querySelector(`#noteChips .note-chip[data-index="${selectedNoteIndex}"] .chip-lyric`);
       if (chip) chip.textContent = takeLyrics[selectedNoteIndex]; // patch in place, don't steal focus
     });
@@ -2341,6 +2555,9 @@
       takeHarmony = [];
       takeLyrics = [];
       selectedNoteIndex = null;
+      editingLineIndex = null;          // the song's lines stay; only this take is cleared
+      updateAddLineBtn();
+      renderSongList();
       document.getElementById('lyricsInput').value = '';
       document.getElementById('lyricHint').textContent = '';
       document.getElementById('transcriptCard').hidden = true;
