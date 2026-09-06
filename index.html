@@ -248,6 +248,7 @@
     background: var(--card2); border: 1px solid var(--border);
     border-radius: 999px; padding: 2px 10px;
   }
+  .detect-row { margin-bottom: 12px; }
   .lyric-label {
     display: block; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
     color: var(--muted); margin-bottom: 6px;
@@ -500,6 +501,16 @@
         <span class="key-badge" id="detectedKey"></span>
       </div>
       <div class="progression" id="progression"></div>
+      <div class="controls detect-row">
+        <div class="field">
+          <label for="sensitivitySelect">Note splitting</label>
+          <select id="sensitivitySelect">
+            <option value="fewer">Fewer, longer notes</option>
+            <option value="balanced" selected>Balanced</option>
+            <option value="more">More, shorter notes</option>
+          </select>
+        </div>
+      </div>
       <label class="lyric-label" for="lyricsInput">Words — one syllable per note</label>
       <input type="text" id="lyricsInput" class="lyrics-input"
              placeholder="e.g. ba by ba by ohh" autocomplete="off" spellcheck="false">
@@ -1365,6 +1376,20 @@
   const FLUX_SETTLE_FRAMES = 5;         // ignore flux while the spectrum resettles after a pitch change
   const PITCH_SETTLE_FRAMES = 2;        // frames the pitch detector needs to catch up after a boundary
   const FLUX_BIN_FLOOR = -100;          // dB below which a bin is treated as empty
+  const FLUX_MIN_BINS = 8;              // too little live spectrum to judge a change
+  const GAP_BRIDGE_MS = 90;             // unvoiced stretches this short are consonants, not rests
+
+  // Real singing needs looser or tighter splitting depending on the voice and
+  // the song, so this is a control rather than a constant.
+  const DETECTION_PRESETS = {
+    fewer:    { minNoteMs: 220, onsetRatio: 2.8, fluxRatio: 2.5, fluxMin: 1.7 },
+    balanced: { minNoteMs: 140, onsetRatio: 2.2, fluxRatio: 1.9, fluxMin: 1.1 },
+    more:     { minNoteMs: 90,  onsetRatio: 1.7, fluxRatio: 1.5, fluxMin: 0.7 },
+  };
+  function detectionSettings() {
+    const el = document.getElementById('sensitivitySelect');
+    return DETECTION_PRESETS[(el && el.value) || 'balanced'] || DETECTION_PRESETS.balanced;
+  }
   let recStream = null, recSource = null, recAnalyser = null, recIntervalId = null;
   let recBuf = null, recording = false, recFrames = [], recStartedAt = 0;
   let recSpec = null, recPrevSpec = null;
@@ -1441,8 +1466,10 @@
         if (diff > 0) flux += diff;         // rises only: onsets, not decays
       }
       // Averaged over the bins that actually carry energy, so the measure means
-      // the same thing for a bright dense voice and a pure sustained tone.
-      flux = active ? flux / active : 0;
+      // the same thing for a bright dense voice and a pure sustained tone. Below
+      // a handful of live bins there isn't enough spectrum to judge, and
+      // dividing by a tiny count would manufacture huge phantom onsets.
+      flux = active >= FLUX_MIN_BINS ? flux / active : 0;
     }
     if (!recPrevSpec) recPrevSpec = new Float32Array(recSpec.length);
     recPrevSpec.set(recSpec);
@@ -1503,45 +1530,85 @@
   // Run-length encode the per-frame pitches, drop runs too short to be real
   // notes (vibrato wobble, octave glitches, consonants), and turn what's left
   // into timed notes. Nulls are silence and become gaps rather than notes.
+  // A real voice throws single-frame octave errors; a median filter removes them
+  // before they can each cut a note in two.
+  function smoothPitches(frames) {
+    const out = frames.map((f) => f.midi);
+    for (let i = 1; i < frames.length - 1; i++) {
+      const around = [frames[i - 1].midi, frames[i].midi, frames[i + 1].midi].filter((m) => m != null);
+      if (around.length >= 2) {
+        around.sort((a, b) => a - b);
+        out[i] = around[Math.floor(around.length / 2)];
+      }
+    }
+    return out;
+  }
+
+  // Consonants are noisy and quiet, so the pitch detector reports nothing during
+  // them. Treated as silence they end the note early and punch holes in the
+  // rhythm, so bridge short unvoiced stretches with the pitch either side. A
+  // genuine attack is still caught by the onset detector, so "ba-by" keeps its
+  // two notes — it just no longer loses time to the consonant between them.
+  function bridgeGaps(frames, pitches) {
+    let i = 0;
+    while (i < pitches.length) {
+      if (pitches[i] != null) { i++; continue; }
+      let j = i;
+      while (j < pitches.length && pitches[j] == null) j++;
+      const gapMs = (frames[j] ? frames[j].t : frames[frames.length - 1].t + REC_FRAME_MS) - frames[i].t;
+      const before = i > 0 ? pitches[i - 1] : null;
+      const after = j < pitches.length ? pitches[j] : null;
+      if (gapMs <= GAP_BRIDGE_MS && before != null && after != null) {
+        for (let k = i; k < j; k++) pitches[k] = before;
+      }
+      i = j;
+    }
+    return pitches;
+  }
+
   function segmentFrames(frames) {
+    if (!frames.length) return [];
+    const cfg = detectionSettings();
+    const pitches = bridgeGaps(frames, smoothPitches(frames));
+
     // A re-sung note at the same pitch looks identical to one held note if you
-    // only follow pitch, so use a loudness spike (a fresh attack) as an extra
-    // note boundary.
-    const minGap = Math.max(2, Math.round(MIN_NOTE_MS / REC_FRAME_MS));
+    // only follow pitch, so an attack is an extra note boundary.
+    const minGap = Math.max(2, Math.round(cfg.minNoteMs / REC_FRAME_MS));
     const onsets = new Array(frames.length).fill(false);
     let lastOnset = -Infinity;
-    // A pitch change is already a note boundary, and the spectrum takes a few
-    // frames to resettle afterwards — counting that settling as a fresh attack
-    // splits one long note into two.
+    // A pitch change is already a boundary, and the spectrum takes a few frames
+    // to resettle afterwards — counting that settling as a fresh attack splits
+    // one long note into two.
     let lastPitchChange = -Infinity;
     for (let i = 3; i < frames.length; i++) {
       const f = frames[i];
-      if (frames[i].midi !== frames[i - 1].midi) lastPitchChange = i;
+      if (pitches[i] !== pitches[i - 1]) lastPitchChange = i;
+      if (pitches[i] == null) continue;             // unvoiced: breath, not an attack
       if (f.rms < ONSET_MIN_RMS) continue;          // silence can't start a note
       if (i - lastOnset < minGap) continue;         // one attack can't follow another instantly
 
       const prevRms = (frames[i - 1].rms + frames[i - 2].rms + frames[i - 3].rms) / 3;
-      const loudJump = f.rms > Math.max(ONSET_MIN_RMS, prevRms * ONSET_RATIO);
+      // Requiring a local peak stops a natural swell in volume reading as a new note.
+      const rmsPeak = f.rms >= frames[i - 1].rms && f.rms > (frames[i + 1] ? frames[i + 1].rms : 0);
+      const loudJump = rmsPeak && f.rms > Math.max(ONSET_MIN_RMS, prevRms * cfg.onsetRatio);
 
       let fluxSum = 0, fluxCount = 0;
       for (let j = Math.max(0, i - FLUX_WINDOW); j < i; j++) { fluxSum += frames[j].flux || 0; fluxCount++; }
       const meanFlux = fluxCount ? fluxSum / fluxCount : 0;
       const flux = f.flux || 0;
       const settled = i - lastPitchChange > FLUX_SETTLE_FRAMES;
-      // Only a local peak counts, so a slow spectral drift can't trip it.
       const isPeak = flux >= (frames[i - 1].flux || 0) && flux > (frames[i + 1] ? frames[i + 1].flux || 0 : 0);
-      const newSyllable = settled && isPeak && flux > Math.max(FLUX_MIN, meanFlux * FLUX_RATIO);
+      const newSyllable = settled && isPeak && flux > Math.max(cfg.fluxMin, meanFlux * cfg.fluxRatio);
 
       if (loudJump || newSyllable) { onsets[i] = true; lastOnset = i; }
     }
 
-    // Boundaries come from three signals: a detected attack, speech starting or
+    // Boundaries come from three signals: an attack, singing starting or
     // stopping, and a change of pitch.
     const isBoundary = new Array(frames.length).fill(false);
     for (let i = 1; i < frames.length; i++) {
-      const prev = frames[i - 1], cur = frames[i];
-      const silenceChanged = (prev.midi == null) !== (cur.midi == null);
-      const pitchChanged = prev.midi != null && cur.midi != null && prev.midi !== cur.midi;
+      const silenceChanged = (pitches[i - 1] == null) !== (pitches[i] == null);
+      const pitchChanged = pitches[i - 1] != null && pitches[i] != null && pitches[i - 1] !== pitches[i];
       if (onsets[i] || silenceChanged || pitchChanged) isBoundary[i] = true;
     }
 
@@ -1561,7 +1628,7 @@
     const kept = [];
     segments.forEach((seg) => {
       const last = kept[kept.length - 1];
-      if (edgeMs(seg.end) - frames[seg.start].t < MIN_NOTE_MS && last) {
+      if (edgeMs(seg.end) - frames[seg.start].t < cfg.minNoteMs && last) {
         last.end = seg.end; // too short to be a note: fold it into the one before
         return;
       }
@@ -1570,14 +1637,11 @@
 
     // The pitch detector reads a 2048-sample window, so for a frame or two after
     // a boundary it still reports the PREVIOUS note. Take each segment's pitch as
-    // the most common value once it has settled, not the value at its first frame,
-    // otherwise a new note gets labelled with the old note's pitch.
+    // the most common value once it has settled, not the value at its first frame.
     kept.forEach((seg) => {
       const counts = new Map();
       const from = Math.min(seg.start + PITCH_SETTLE_FRAMES, seg.end - 1);
-      for (let i = from; i < seg.end; i++) {
-        counts.set(frames[i].midi, (counts.get(frames[i].midi) || 0) + 1);
-      }
+      for (let i = from; i < seg.end; i++) counts.set(pitches[i], (counts.get(pitches[i]) || 0) + 1);
       let best = null, bestCount = -1;
       counts.forEach((count, midi) => { if (count > bestCount) { bestCount = count; best = midi; } });
       seg.midi = best;
@@ -1932,6 +1996,27 @@
     renderTake();
   }
 
+  // Re-segments the take already recorded, so a different splitting setting can
+  // be judged against the same singing instead of needing another take.
+  function resegmentTake() {
+    if (!recFrames.length) return;
+    const typed = document.getElementById('lyricsInput').value;
+    takeNotes = segmentFrames(recFrames);
+    selectedNoteIndex = null;
+    stopTakePlayback();
+    if (!takeNotes.length) {
+      document.getElementById('transcriptCard').hidden = true;
+      document.getElementById('playbackCard').hidden = true;
+      setRecStatus("Didn't catch any notes — try singing a bit louder or longer");
+      return;
+    }
+    setLyricsFromText(typed);
+    syncLyricsInput();
+    analyzeTake();
+    renderTake();
+    setRecStatus(`Got ${takeNotes.length} note${takeNotes.length === 1 ? '' : 's'} — tap any note to fix it`);
+  }
+
   function finishTake() {
     takeNotes = segmentFrames(recFrames);
     window.__DEBUG_TAKE = { frames: recFrames, notes: takeNotes }; // console/test inspection hook
@@ -2026,6 +2111,7 @@
       startVoice(takeNotes[selectedNoteIndex].midi, 0.26);
     });
     document.getElementById('editorDeleteBtn').addEventListener('click', deleteSelectedNote);
+    document.getElementById('sensitivitySelect').addEventListener('change', resegmentTake);
     document.getElementById('lyricsInput').addEventListener('input', (e) => {
       setLyricsFromText(e.target.value);
       renderTake();
