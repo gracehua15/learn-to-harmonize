@@ -849,6 +849,17 @@
     '-4': 'Major 3rd below',
     '-7': '5th below',
   };
+  // Generic interval name for any semitone gap, used to describe what you're
+  // actually singing relative to the base note (not just whether you've hit
+  // the one target interval for this round).
+  const GENERIC_INTERVAL_NAMES = [
+    'Unison', 'Minor 2nd', 'Major 2nd', 'Minor 3rd', 'Major 3rd', 'Perfect 4th',
+    'Tritone', 'Perfect 5th', 'Minor 6th', 'Major 6th', 'Minor 7th', 'Major 7th',
+  ];
+  function intervalNameFromSemitones(semitones) {
+    const pc = ((semitones % 12) + 12) % 12;
+    return GENERIC_INTERVAL_NAMES[pc];
+  }
   let practiceScaleType = 'major';
   let practiceRangeStartOctave = 3;
   const enabledKeys = new Set([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
@@ -947,8 +958,10 @@
     const fb = document.getElementById('practiceFeedback');
     fb.textContent = '';
     fb.className = 'feedback';
+    document.getElementById('pitchReadout').textContent = '–';
     clearWave();
     playPracticeBase();
+    resumePitchDetection(); // no-op on the very first round, before the mic has started
   }
 
   function playPracticeBase() {
@@ -1046,6 +1059,7 @@
     const fb = document.getElementById('practiceFeedback');
     fb.textContent = `✅ Correct! That was ${noteName(practiceTargetMidi)}.`;
     fb.className = 'feedback correct';
+    pausePitchDetection(); // stop listening/updating until the next round
   }
 
   function pitchTick() {
@@ -1071,10 +1085,17 @@
 
     const midiFloat = 69 + 12 * Math.log2(freq / 440);
     const roundedMidi = Math.round(midiFloat);
-    const fineCents = Math.round((midiFloat - roundedMidi) * 100);
     lastDetectedMidi = roundedMidi;
-    document.getElementById('pitchReadout').textContent =
-      `${noteName(roundedMidi)} (${fineCents > 0 ? '+' : ''}${fineCents}¢)`;
+
+    // Show the note you're singing plus its interval name relative to the base
+    // note (Major 3rd, Minor 2nd, ...) instead of a cents offset — the interval
+    // is what matters for ear training, not how many cents sharp/flat you are.
+    const sungInterval = practiceBaseMidi != null
+      ? intervalNameFromSemitones(roundedMidi - practiceBaseMidi)
+      : null;
+    document.getElementById('pitchReadout').textContent = sungInterval
+      ? `${noteName(roundedMidi)} · ${sungInterval}`
+      : noteName(roundedMidi);
 
     let close = false;
     if (practiceTargetMidi != null) {
@@ -1088,6 +1109,19 @@
       }
     }
     drawWaveTick(rms, close ? 'close' : 'far');
+  }
+
+  // Pause/resume just the analysis loop, keeping the mic stream itself open —
+  // used to stop reacting once a round is solved, and to pick back up on the
+  // next round, without re-prompting for mic permission each time.
+  function pausePitchDetection() {
+    if (micIntervalId) { clearInterval(micIntervalId); micIntervalId = null; }
+    setMicStatus('🎤 Paused');
+  }
+  function resumePitchDetection() {
+    if (!listening || !micAnalyser || micIntervalId) return;
+    setMicStatus('🎤 Listening…');
+    micIntervalId = setInterval(pitchTick, 80);
   }
 
   function setMicStatus(text) {
