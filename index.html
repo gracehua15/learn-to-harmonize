@@ -424,7 +424,7 @@
     </div>
 
     <div class="card">
-      <div class="grid-title">Hold a button to hear that harmony against the base note</div>
+      <div class="grid-title">Hold a button to hear that harmony — each plays the note that belongs in the selected key</div>
       <div class="harmony-panel disabled" id="harmonyPanel"></div>
       <div class="hint" id="hintText">Pick a note above to begin.</div>
     </div>
@@ -862,13 +862,16 @@
   }
 
   // ---- harmony ----
-  function startHarmony(offset, label, btnEl) {
+  function startHarmony(steps, btnEl) {
     if (activeBaseMidi == null) return;
-    const midi = activeBaseMidi + offset;
+    // The degree is resolved inside the selected key, so "3rd" is a major third
+    // over C in C major and a minor third over D in the same key.
+    const midi = diatonicHarmony(activeBaseMidi, { root: rootPc, type: scaleType }, steps);
     if (harmonyVoice) stopVoice(harmonyVoice);
     harmonyVoice = startVoice(midi, 0.24, true);
     activeHarmonyMidi = midi;
-    currentIntervalLabel = label;
+    // Name what it actually turned out to be — that's the lesson.
+    currentIntervalLabel = intervalNameFromSemitones(midi - activeBaseMidi);
     document.querySelectorAll('.harm-btn.active').forEach((b) => b.classList.remove('active'));
     btnEl.classList.add('active');
     updatePianoHighlights();
@@ -890,11 +893,10 @@
     const panel = document.getElementById('harmonyPanel');
     panel.innerHTML = '';
     directionHeaders(panel);
-    eachIntervalCell((offset, short, label) => {
+    eachLearnDegreeCell((steps, short) => {
       const btn = document.createElement('button');
       btn.className = 'harm-btn';
-      btn.dataset.offset = offset;
-      btn.dataset.label = label;
+      btn.dataset.steps = steps;
       btn.textContent = short;
       panel.appendChild(btn);
     });
@@ -903,13 +905,12 @@
   function initHarmonyButtons() {
     buildHarmonyPanel();
     document.querySelectorAll('.harm-btn').forEach((btn) => {
-      const offset = parseInt(btn.dataset.offset, 10);
-      const label = btn.dataset.label;
+      const steps = parseInt(btn.dataset.steps, 10);
       btn.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         if (activeBaseMidi == null) return;
         try { btn.setPointerCapture(e.pointerId); } catch (err) {}
-        startHarmony(offset, label, btn);
+        startHarmony(steps, btn);
       });
       const release = () => { if (btn.classList.contains('active')) stopHarmony(btn); };
       btn.addEventListener('pointerup', release);
@@ -1065,6 +1066,24 @@
   // Practice asks for a scale degree, not a fixed semitone count: a "3rd above"
   // in the round's key is major or minor depending on which degree the base note
   // sits on, which is what actually makes a harmony line stay in key.
+  // Learn offers degrees, not fixed intervals: the button says "3rd" and the app
+  // plays whichever third belongs in the selected key, which is the thing being
+  // taught. 8th is the octave (seven scale steps).
+  const LEARN_DEGREES = [
+    { steps: 2, name: '3rd' },
+    { steps: 3, name: '4th' },
+    { steps: 4, name: '5th' },
+    { steps: 5, name: '6th' },
+    { steps: 7, name: '8th' },
+  ];
+  function eachLearnDegreeCell(fn) {
+    LEARN_DEGREES.forEach((d) => {
+      [1, -1].forEach((dir) => {
+        fn(d.steps * dir, `${d.name} ${dir > 0 ? '↑' : '↓'}`);
+      });
+    });
+  }
+
   const PRACTICE_DEGREES = [
     { steps: 2, name: '3rd' },
     { steps: 4, name: '5th' },
