@@ -283,6 +283,7 @@
   .lyrics-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   .editor-lyric { margin-bottom: 8px; }
   .lyric-hint { font-size: 11px; color: var(--harm-color); margin: 6px 0 10px; min-height: 14px; }
+  .scale-btn { margin: 8px auto 2px; display: block; }
   .note-chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip-lyric {
     font-size: 10px; font-weight: 700; color: var(--accent2);
@@ -527,6 +528,7 @@
       <div class="card">
         <div class="prompt" id="practicePrompt">Press "New round" to begin.</div>
         <div class="round-key" id="roundKey"></div>
+        <button class="big-btn small scale-btn" id="playScaleBtn" hidden>♪ Play the scale</button>
         <div class="sing-row">
           <div class="base-col">
             <div class="np-label">Base</div>
@@ -1374,6 +1376,7 @@
     rangeSel.addEventListener('change', () => { practiceRangeStartOctave = parseInt(rangeSel.value, 10); });
 
     document.getElementById('playBaseBtn').addEventListener('click', playPracticeBase);
+    document.getElementById('playScaleBtn').addEventListener('click', playPracticeScale);
     document.getElementById('newRoundBtn').addEventListener('click', generateRound);
 
     document.getElementById('startPracticeBtn').addEventListener('click', () => {
@@ -1470,10 +1473,12 @@
 
     document.getElementById('pBaseNote').textContent = noteName(practiceBaseMidi);
     document.getElementById('practicePrompt').textContent = `Sing: ${practiceAskLabel}`;
-    // The key only decides the answer in the in-key drill, so only show it there.
+    // The key only decides the answer in the in-key drill, so only show it —
+    // and offer its scale — there.
     document.getElementById('roundKey').textContent = practiceMode === 'inkey'
       ? `in ${NOTE_NAMES[practiceKey.root]} ${practiceKey.type === 'major' ? 'major' : 'minor'}`
       : '';
+    document.getElementById('playScaleBtn').hidden = practiceMode !== 'inkey';
     const fb = document.getElementById('practiceFeedback');
     fb.textContent = '';
     fb.className = 'feedback';
@@ -1493,26 +1498,25 @@
   }
 
   const SCALE_RUN_STEP = 0.26;          // gap between notes of the run-up
-  const SCALE_RUN_PAUSE = 0.42;         // then a breath before the note to answer on
 
   function playPracticeBase() {
     if (practiceBaseMidi == null) return;
     ensureAudio();
-    // In the scale drill the run-up is the point: hearing the scale is what
-    // lets you place the base note as a degree rather than a bare pitch.
-    if (practiceMode === 'inkey' && practiceOrder === 'scale' && practiceKey) {
-      const t0 = audioCtx.currentTime + 0.05;
-      const steps = SCALES[practiceKey.type];
-      const tonic = scaleTonicMidi(practiceKey.root);
-      steps.concat([12]).forEach((iv, i) => {
-        const at = t0 + i * SCALE_RUN_STEP;
-        startVoice(tonic + iv, 0.18, false, at, at + SCALE_RUN_STEP + 0.1);
-      });
-      const baseAt = t0 + (steps.length + 1) * SCALE_RUN_STEP + SCALE_RUN_PAUSE;
-      startVoice(practiceBaseMidi, 0.3, false, baseAt, baseAt + 2.4);
-      return;
-    }
     startVoice(practiceBaseMidi, 0.3); // real sample decays on its own, nothing to stop
+  }
+
+  // The scale is a reference to reach for when you need it, not something to sit
+  // through on every replay of the note — so it lives on its own button.
+  function playPracticeScale() {
+    if (!practiceKey) return;
+    ensureAudio();
+    const t0 = audioCtx.currentTime + 0.05;
+    const steps = SCALES[practiceKey.type];
+    const tonic = scaleTonicMidi(practiceKey.root);
+    steps.concat([12]).forEach((iv, i) => {
+      const at = t0 + i * SCALE_RUN_STEP;
+      startVoice(tonic + iv, 0.18, false, at, at + SCALE_RUN_STEP + 0.1);
+    });
   }
 
   // ---- practice: microphone + pitch detection ----
