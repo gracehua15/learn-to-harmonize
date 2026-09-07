@@ -332,6 +332,11 @@
   .note-editor > summary strong { color: var(--text); font-size: 14px; }
   .editor-body { margin-top: 10px; }
   #playMelodyBtn, #playHarmonyBtn { margin-top: 14px; }
+  .add-chip {
+    border-style: dashed; color: var(--muted); font-size: 18px; font-weight: 700;
+    min-width: 46px; justify-content: center;
+  }
+  .add-chip:hover { color: var(--text); border-color: var(--accent); }
   .harmony-chip { color: var(--harm-color); }
   .harmony-chip .chip-note { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .harmony-chip .chip-interval { color: var(--muted); }
@@ -578,6 +583,7 @@
             <button class="edit-btn" data-delta="1">♯ up</button>
             <button class="edit-btn" data-delta="12">+8ve</button>
             <button class="edit-btn" id="editorPlayBtn">▶ Hear</button>
+            <button class="edit-btn" id="editorInsertBtn">＋ Insert after</button>
             <button class="edit-btn danger" id="editorDeleteBtn">✕ Remove</button>
           </div>
           <div class="editor-label editor-length">Length <strong id="editorLength">—</strong></div>
@@ -685,19 +691,42 @@
   // below) rather than clipping guards being unnecessary, a compressor here is
   // cheap insurance against multiple simultaneous voices (base + harmony) adding
   // up past 0 dBFS.
+  // Tone controls, kept together so the balance between loud and harsh is
+  // adjustable in one place.
+  const TONE = {
+    compThreshold: -14,   // gentler than a brick limiter: less pumping, less grit
+    compRatio: 6,
+    compKnee: 14,
+    compAttack: 0.012,    // let the hammer transient through instead of squashing it
+    shelfHz: 2200,        // piano "bite" lives here; a shelf tames it musically
+    shelfGain: -10,
+    lowpassHz: 4500,      // and this takes off what the soft clipper adds on top
+    lowpassQ: 0.6,
+    drive: 1.05,          // barely-there saturation; 1.6 was audibly buzzy
+    makeup: 3.4,
+  };
+
   let masterBus = null, masterGain = null, masterShaper = null;
+  let masterShelf = null, masterLowpass = null;
   function ensureAudio() {
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       masterBus = audioCtx.createDynamicsCompressor();
-      masterBus.threshold.value = -20;
-      masterBus.knee.value = 8;
-      masterBus.ratio.value = 12;      // more of a limiter than a compressor now
-      masterBus.attack.value = 0.003;
-      masterBus.release.value = 0.15;
+      masterBus.threshold.value = TONE.compThreshold;
+      masterBus.knee.value = TONE.compKnee;
+      masterBus.ratio.value = TONE.compRatio;
+      masterBus.attack.value = TONE.compAttack;
+      masterBus.release.value = 0.22;
+      // These samples are bright, and stacking voices piles their upper
+      // partials on top of each other, which is what reads as shrill. Shelve
+      // the top down before anything downstream amplifies it.
+      masterShelf = audioCtx.createBiquadFilter();
+      masterShelf.type = 'highshelf';
+      masterShelf.frequency.value = TONE.shelfHz;
+      masterShelf.gain.value = TONE.shelfGain;
       masterGain = audioCtx.createGain();
-      masterGain.gain.value = 2.0;    // makeup after the limiter
-      // Soft clipper last. A phone speaker responds to average level, not peak,
+      masterGain.gain.value = TONE.makeup;   // makeup after the limiter
+      // Soft clipper next. A phone speaker responds to average level, not peak,
       // and piano notes have a big crest factor, so hard limiting alone leaves
       // them quiet. tanh saturation lifts the average and mathematically caps
       // the output below full scale, so it can be driven hard without clipping.
@@ -705,13 +734,21 @@
       const curve = new Float32Array(1024);
       for (let i = 0; i < curve.length; i++) {
         const x = (i * 2) / (curve.length - 1) - 1;
-        curve[i] = Math.tanh(x * 1.6);
+        curve[i] = Math.tanh(x * TONE.drive);
       }
       masterShaper.curve = curve;
       masterShaper.oversample = '4x';
-      masterBus.connect(masterGain);
+      // Saturation always adds harmonics above whatever it is fed; filtering
+      // after it is what keeps the extra loudness from arriving as fizz.
+      masterLowpass = audioCtx.createBiquadFilter();
+      masterLowpass.type = 'lowpass';
+      masterLowpass.frequency.value = TONE.lowpassHz;
+      masterLowpass.Q.value = TONE.lowpassQ;
+      masterBus.connect(masterShelf);
+      masterShelf.connect(masterGain);
       masterGain.connect(masterShaper);
-      masterShaper.connect(audioCtx.destination);
+      masterShaper.connect(masterLowpass);
+      masterLowpass.connect(audioCtx.destination);
       preloadAllSamples();
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -2208,12 +2245,16 @@
 
   // Lyrics are stored one syllable per note, index-aligned with takeNotes, so
   // editing or deleting a note keeps its word attached.
+  // A note with no word still needs a slot in the words box, or adding or
+  // removing one note shifts every word after it onto the wrong note.
+  const BLANK_SYLLABLE = '_';
   function parseSyllables(text) {
     return text.split(/[\s-]+/).map((s) => s.trim()).filter(Boolean);
   }
   function setLyricsFromText(text) {
     const syllables = parseSyllables(text);
-    takeLyrics = takeNotes.map((_, i) => syllables[i] || '');
+    takeLyrics = takeNotes.map((_, i) =>
+      (!syllables[i] || syllables[i] === BLANK_SYLLABLE) ? '' : syllables[i]);
     const hint = document.getElementById('lyricHint');
     if (syllables.length && syllables.length !== takeNotes.length) {
       hint.textContent = `${syllables.length} syllable${syllables.length === 1 ? '' : 's'} for ` +
@@ -2224,7 +2265,9 @@
     }
   }
   function syncLyricsInput() {
-    document.getElementById('lyricsInput').value = takeLyrics.join(' ').trim();
+    const words = takeLyrics.map((w) => w || BLANK_SYLLABLE);
+    while (words.length && words[words.length - 1] === BLANK_SYLLABLE) words.pop();
+    document.getElementById('lyricsInput').value = words.join(' ');
   }
 
   // The melody row shows only what was sung; the harmony row below mirrors it
@@ -2254,6 +2297,18 @@
       chip.addEventListener('click', () => selectNote(i));
       wrap.appendChild(chip);
     });
+
+    // A note that never got picked up has to be addable, or the only fix for a
+    // missed note is re-singing the whole line.
+    if (takeNotes.length) {
+      const add = document.createElement('button');
+      add.className = 'note-chip add-chip';
+      add.id = 'addNoteChip';
+      add.title = 'Add a note at the end';
+      add.textContent = '＋';
+      add.addEventListener('click', () => insertNote(takeNotes.length - 1));
+      wrap.appendChild(add);
+    }
 
     renderHarmonyChips();
 
@@ -2357,9 +2412,9 @@
     relayoutTake();                     // gaps stay constant; everything after just shifts
     renderTake();
     saveCurrentLine();
-    ensureAudio();
-    startVoice(note.midi, 0.26, false, audioCtx.currentTime,
-      audioCtx.currentTime + Math.max(MIN_RING_SEC, note.durMs / 1000 + NOTE_TAIL_SEC));
+    // Deliberately silent: length is usually nudged several times in a row, and
+    // replaying the note on each tap turns that into a stutter. The chip width
+    // and the readout show the change.
   }
 
   // Nudging a harmony note turns the whole line into a custom one, so the
@@ -2376,6 +2431,33 @@
     saveCurrentLine();
     ensureAudio();
     startVoice(next, 0.24);
+  }
+
+  // Adds a note straight after `afterIndex` (or at the end). It starts as a
+  // copy of its neighbour, which is nearly always closer than any fixed default
+  // and leaves it a nudge or two from right.
+  function insertNote(afterIndex) {
+    if (!takeNotes.length) return;
+    const at = Math.min(takeNotes.length, (afterIndex == null ? takeNotes.length - 1 : afterIndex) + 1);
+    const ref = takeNotes[at - 1] || takeNotes[at];
+    takeNotes.splice(at, 0, { midi: ref.midi, startMs: 0, durMs: ref.durMs });
+    takeLyrics.splice(at, 0, '');
+    // A hand-edited harmony isn't regenerated, so give the new note a harmony
+    // note by carrying its neighbour's interval across rather than a gap.
+    const refHarm = takeHarmony[at - 1] != null ? takeHarmony[at - 1] : takeHarmony[at];
+    const refMidi = takeHarmony[at - 1] != null ? takeNotes[at - 1].midi : (takeNotes[at + 1] || ref).midi;
+    takeHarmony.splice(at, 0, refHarm != null ? refHarm + (ref.midi - refMidi) : null);
+    relayoutTake();
+    syncLyricsInput();
+    selectedNoteIndex = at;
+    analyzeTake();                      // key, chords and harmony all follow the new note
+    renderTake();
+    saveCurrentLine();
+    ensureAudio();
+    startVoice(takeNotes[at].midi, 0.26);
+    // It lands on a guessed pitch, so open the editor it needs to be fixed in.
+    document.getElementById('noteEditor').open = true;
+    setRecStatus(`Added a note — nudge it to the pitch you meant (${takeNotes.length} notes)`);
   }
 
   function deleteSelectedNote() {
@@ -2673,6 +2755,7 @@
       ensureAudio();
       startVoice(takeNotes[selectedNoteIndex].midi, 0.26);
     });
+    document.getElementById('editorInsertBtn').addEventListener('click', () => insertNote(selectedNoteIndex));
     document.getElementById('editorDeleteBtn').addEventListener('click', deleteSelectedNote);
     document.querySelectorAll('#noteEditor .edit-btn[data-scale]').forEach((btn) => {
       btn.addEventListener('click', () => adjustSelectedLength(parseFloat(btn.dataset.scale)));
