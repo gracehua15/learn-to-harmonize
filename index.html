@@ -488,6 +488,13 @@
               <option value="minor">Natural Minor</option>
             </select>
           </div>
+          <div class="field" id="orderField" hidden>
+            <label for="pOrderSelect">Note order</label>
+            <select id="pOrderSelect">
+              <option value="random" selected>Truly random</option>
+              <option value="scale">Scale on repeat</option>
+            </select>
+          </div>
           <div class="field">
             <label for="pRangeSelect">Range</label>
             <select id="pRangeSelect">
@@ -1272,6 +1279,12 @@
   // everything you don't want.
   const enabledIntervals = new Set();   // semitones, e.g. 4 = major 3rd above
   const enabledDegrees = new Set();     // signed scale steps, e.g. +2 = a 3rd above
+  // Only the in-key drill has a note order: "random" draws a fresh key and note
+  // every round, "scale" holds one key and walks its scale in order, playing the
+  // scale before each round so the degree can be placed by ear.
+  let practiceOrder = 'random';
+  let practiceScaleStep = 0;
+  let practiceFixedKey = null;
   let practiceKey = null;               // {root, type} the current round is drawn from
   let practiceAskLabel = '';            // what this round asked for, for the feedback lines
   let practiceBaseMidi = null;
@@ -1305,6 +1318,8 @@
     });
     document.getElementById('targetsTitle').textContent =
       inKey ? 'Which degrees to practice' : 'Which intervals to practice';
+    // Note order only means something when the answer depends on the key.
+    document.getElementById('orderField').hidden = !inKey;
   }
 
   function initModeSwitch() {
@@ -1326,6 +1341,10 @@
     scaleSel.value = practiceScaleType;
     scaleSel.addEventListener('change', () => { practiceScaleType = scaleSel.value; });
 
+    const orderSel = document.getElementById('pOrderSelect');
+    orderSel.value = practiceOrder;
+    orderSel.addEventListener('change', () => { practiceOrder = orderSel.value; });
+
     const rangeSel = document.getElementById('pRangeSelect');
     rangeSel.value = practiceRangeStartOctave;
     rangeSel.addEventListener('change', () => { practiceRangeStartOctave = parseInt(rangeSel.value, 10); });
@@ -1346,6 +1365,13 @@
       document.getElementById('setupError').hidden = true;
       document.getElementById('practiceSetup').hidden = true;
       document.getElementById('practiceSession').hidden = false;
+      // The scale drill stays in one key for the whole session — that is what
+      // makes hearing a degree against a tonic possible.
+      practiceFixedKey = {
+        root: ALL_KEY_PCS[Math.floor(Math.random() * ALL_KEY_PCS.length)],
+        type: practiceScaleType,
+      };
+      practiceScaleStep = 0;
       clearWave();
       generateRound();
       startListening(); // auto-start — same click, so still a real user gesture
@@ -1359,9 +1385,16 @@
 
   // ---- practice: rounds ----
   function generateRound() {
-    const root = ALL_KEY_PCS[Math.floor(Math.random() * ALL_KEY_PCS.length)]; // a key's tonic pitch class, 0-11
-    const intervals = SCALES[practiceScaleType];
-    const degree = intervals[Math.floor(Math.random() * intervals.length)]; // scale-degree interval, 0-11
+    const scaleWalk = practiceMode === 'inkey' && practiceOrder === 'scale';
+    // In the scale drill the key is fixed for the session and the base note is
+    // the next step up the scale, so the notes come round in order and repeat.
+    const root = scaleWalk
+      ? practiceFixedKey.root
+      : ALL_KEY_PCS[Math.floor(Math.random() * ALL_KEY_PCS.length)]; // a key's tonic pitch class, 0-11
+    const intervals = SCALES[scaleWalk ? practiceFixedKey.type : practiceScaleType];
+    const degree = scaleWalk
+      ? intervals[practiceScaleStep++ % intervals.length]
+      : intervals[Math.floor(Math.random() * intervals.length)]; // scale-degree interval, 0-11
     // root+degree is folded back into a single pitch class first, THEN placed in a
     // freely-chosen octave — adding degree on top of an already-picked octave (as a
     // previous version did) let root+degree overflow up to ~2 octaves above the
@@ -1371,8 +1404,10 @@
     // note is always where the label says. Every scale note sits in that octave;
     // the top C is the one that can also land at the upper end.
     const rangeLow = 12 * (practiceRangeStartOctave + 1);
-    practiceBaseMidi = rangeLow + pc + (pc === 0 && Math.random() < 0.5 ? 12 : 0);
-    practiceKey = { root: root, type: practiceScaleType };
+    practiceBaseMidi = scaleWalk
+      ? scaleTonicMidi(root) + degree     // walks up the scale, then starts over
+      : rangeLow + pc + (pc === 0 && Math.random() < 0.5 ? 12 : 0);
+    practiceKey = { root: root, type: scaleWalk ? practiceFixedKey.type : practiceScaleType };
     if (practiceMode === 'inkey') {
       // The target is the diatonic note that many scale steps away, so its
       // quality follows the key: a 3rd above C in C major is E (major), but a
@@ -1412,8 +1447,35 @@
     resumePitchDetection(); // no-op on the very first round, before the mic has started
   }
 
+  // Where the tonic sits for the scale drill. Folding notes into one octave by
+  // pitch class would make the "scale" jump around when it wraps past B, so the
+  // run is built by stacking scale steps on a single tonic instead. Roots above
+  // F start an octave down to keep the whole run near the chosen range.
+  function scaleTonicMidi(root) {
+    const rangeLow = 12 * (practiceRangeStartOctave + 1);
+    return rangeLow + root - (root > 5 ? 12 : 0);
+  }
+
+  const SCALE_RUN_STEP = 0.26;          // gap between notes of the run-up
+  const SCALE_RUN_PAUSE = 0.42;         // then a breath before the note to answer on
+
   function playPracticeBase() {
     if (practiceBaseMidi == null) return;
+    ensureAudio();
+    // In the scale drill the run-up is the point: hearing the scale is what
+    // lets you place the base note as a degree rather than a bare pitch.
+    if (practiceMode === 'inkey' && practiceOrder === 'scale' && practiceKey) {
+      const t0 = audioCtx.currentTime + 0.05;
+      const steps = SCALES[practiceKey.type];
+      const tonic = scaleTonicMidi(practiceKey.root);
+      steps.concat([12]).forEach((iv, i) => {
+        const at = t0 + i * SCALE_RUN_STEP;
+        startVoice(tonic + iv, 0.18, false, at, at + SCALE_RUN_STEP + 0.1);
+      });
+      const baseAt = t0 + (steps.length + 1) * SCALE_RUN_STEP + SCALE_RUN_PAUSE;
+      startVoice(practiceBaseMidi, 0.3, false, baseAt, baseAt + 2.4);
+      return;
+    }
     startVoice(practiceBaseMidi, 0.3); // real sample decays on its own, nothing to stop
   }
 
