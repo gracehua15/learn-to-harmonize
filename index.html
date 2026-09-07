@@ -322,6 +322,20 @@
   .note-editor {
     margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);
   }
+  .note-editor > summary {
+    list-style: none; cursor: pointer; font-size: 12px; color: var(--muted);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .note-editor > summary::-webkit-details-marker { display: none; }
+  .note-editor > summary::before { content: '▸'; font-size: 10px; }
+  .note-editor[open] > summary::before { content: '▾'; }
+  .note-editor > summary strong { color: var(--text); font-size: 14px; }
+  .editor-body { margin-top: 10px; }
+  #playMelodyBtn, #playHarmonyBtn { margin-top: 14px; }
+  .harmony-chip { color: var(--harm-color); }
+  .harmony-chip .chip-note { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .harmony-chip .chip-interval { color: var(--muted); }
+  .harmony-chip.active-harm .chip-interval { color: #2a1a00; }
   .editor-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
   .editor-label strong { color: var(--text); font-size: 14px; }
   .editor-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -533,7 +547,7 @@
 
     <div class="card" id="transcriptCard" hidden>
       <div class="grid-title">
-        What you sang
+        Melody — what you sang
         <span class="key-badge" id="detectedKey"></span>
       </div>
       <div class="progression" id="progression"></div>
@@ -552,35 +566,33 @@
              placeholder="e.g. ba by ba by ohh" autocomplete="off" spellcheck="false">
       <div class="lyric-hint" id="lyricHint"></div>
       <div class="note-chips" id="noteChips"></div>
-      <div class="note-editor" id="noteEditor" hidden>
-        <div class="editor-label">Off-tune? Nudge <strong id="editorNoteName"></strong></div>
-        <input type="text" id="editorLyric" class="lyrics-input editor-lyric"
-               placeholder="word for this note" autocomplete="off" spellcheck="false">
-        <div class="editor-buttons">
-          <button class="edit-btn" data-delta="-12">−8ve</button>
-          <button class="edit-btn" data-delta="-1">♭ down</button>
-          <button class="edit-btn" data-delta="1">♯ up</button>
-          <button class="edit-btn" data-delta="12">+8ve</button>
-          <button class="edit-btn" id="editorPlayBtn">▶ Hear</button>
-          <button class="edit-btn danger" id="editorDeleteBtn">✕ Remove</button>
+
+      <details class="note-editor" id="noteEditor">
+        <summary>Off-tune? Nudge <strong id="editorNoteName">—</strong></summary>
+        <div class="editor-body">
+          <input type="text" id="editorLyric" class="lyrics-input editor-lyric"
+                 placeholder="word for this note" autocomplete="off" spellcheck="false">
+          <div class="editor-buttons">
+            <button class="edit-btn" data-delta="-12">−8ve</button>
+            <button class="edit-btn" data-delta="-1">♭ down</button>
+            <button class="edit-btn" data-delta="1">♯ up</button>
+            <button class="edit-btn" data-delta="12">+8ve</button>
+            <button class="edit-btn" id="editorPlayBtn">▶ Hear</button>
+            <button class="edit-btn danger" id="editorDeleteBtn">✕ Remove</button>
+          </div>
+          <div class="editor-label editor-length">Length <strong id="editorLength">—</strong></div>
+          <div class="editor-buttons">
+            <button class="edit-btn" data-scale="0.75">◀ Shorter</button>
+            <button class="edit-btn" data-scale="1.3333">Longer ▶</button>
+          </div>
         </div>
-        <div class="editor-label editor-length">Length <strong id="editorLength"></strong></div>
-        <div class="editor-buttons">
-          <button class="edit-btn" data-scale="0.75">◀ Shorter</button>
-          <button class="edit-btn" data-scale="1.3333">Longer ▶</button>
-        </div>
-        <div class="editor-label editor-length">Harmony note <strong id="editorHarmony"></strong></div>
-        <div class="editor-buttons">
-          <button class="edit-btn" data-harm="-12">−8ve</button>
-          <button class="edit-btn" data-harm="-1">♭ down</button>
-          <button class="edit-btn" data-harm="1">♯ up</button>
-          <button class="edit-btn" data-harm="12">+8ve</button>
-          <button class="edit-btn" id="editorHarmPlayBtn">▶ Hear</button>
-        </div>
-      </div>
+      </details>
+
+      <button class="big-btn" id="playMelodyBtn">▶ Play melody</button>
     </div>
 
-    <div class="card" id="playbackCard" hidden>
+    <div class="card" id="harmonyCard" hidden>
+      <div class="grid-title">Harmony</div>
       <div class="controls">
         <div class="field">
           <label for="harmonySelect">Harmony line</label>
@@ -593,11 +605,26 @@
           </select>
         </div>
       </div>
-      <div class="play-buttons">
-        <button class="big-btn" id="playMelodyBtn">▶ Melody only</button>
-        <button class="big-btn" id="playHarmonyBtn">▶ Harmony only</button>
-        <button class="big-btn start-btn" id="playBothBtn">▶ Play together</button>
-      </div>
+      <div class="note-chips" id="harmonyChips"></div>
+
+      <details class="note-editor" id="harmonyEditor">
+        <summary>Adjust harmony <strong id="editorHarmony">—</strong></summary>
+        <div class="editor-body">
+          <div class="editor-buttons">
+            <button class="edit-btn" data-harm="-12">−8ve</button>
+            <button class="edit-btn" data-harm="-1">♭ down</button>
+            <button class="edit-btn" data-harm="1">♯ up</button>
+            <button class="edit-btn" data-harm="12">+8ve</button>
+            <button class="edit-btn" id="editorHarmPlayBtn">▶ Hear</button>
+          </div>
+        </div>
+      </details>
+
+      <button class="big-btn" id="playHarmonyBtn">▶ Play harmony</button>
+    </div>
+
+    <div class="card" id="playbackCard" hidden>
+      <button class="big-btn start-btn" id="playBothBtn">▶ Play together</button>
       <button class="back-link" id="clearTakeBtn">↺ Record a new take</button>
     </div>
 
@@ -2200,6 +2227,15 @@
     document.getElementById('lyricsInput').value = takeLyrics.join(' ').trim();
   }
 
+  // The melody row shows only what was sung; the harmony row below mirrors it
+  // one chip per note, so the two lines read as two staves rather than one
+  // crowded column.
+  function chipWidth(durMs) {
+    // Wider chip = longer note, so edits to length read at a glance — and the
+    // harmony chip takes its width from the melody note it sits under.
+    return Math.round(Math.max(52, Math.min(150, 44 + durMs / 14))) + 'px';
+  }
+
   function renderTake() {
     const wrap = document.getElementById('noteChips');
     wrap.innerHTML = '';
@@ -2207,26 +2243,19 @@
       const chip = document.createElement('button');
       chip.className = 'note-chip' + (i === selectedNoteIndex ? ' selected' : '');
       chip.dataset.index = i;
-      // Wider chip = longer note, so edits to length read at a glance.
-      chip.style.minWidth = Math.round(Math.max(52, Math.min(150, 44 + n.durMs / 14))) + 'px';
+      chip.style.minWidth = chipWidth(n.durMs);
       const lyric = document.createElement('span');
       lyric.className = 'chip-lyric';
       lyric.textContent = takeLyrics[i] || '';
       const main = document.createElement('span');
       main.textContent = noteName(n.midi);
-      const harm = document.createElement('span');
-      harm.className = 'chip-harm';
-      harm.textContent = takeHarmony[i] != null ? noteName(takeHarmony[i]) : '';
-      const interval = document.createElement('span');
-      interval.className = 'chip-interval';
-      interval.textContent = takeHarmony[i] != null ? intervalTag(n.midi, takeHarmony[i]) : '';
       chip.appendChild(lyric);
       chip.appendChild(main);
-      chip.appendChild(harm);
-      chip.appendChild(interval);
       chip.addEventListener('click', () => selectNote(i));
       wrap.appendChild(chip);
     });
+
+    renderHarmonyChips();
 
     document.getElementById('detectedKey').textContent = takeKey
       ? `Key: ${NOTE_NAMES[takeKey.root]} ${takeKey.type === 'major' ? 'major' : 'minor'}`
@@ -2240,18 +2269,46 @@
     renderNoteEditor();
   }
 
+  // Each harmony chip shows the note it plays and how far it sits from the
+  // melody note above it, and clicking one plays that harmony note alone.
+  function renderHarmonyChips() {
+    const wrap = document.getElementById('harmonyChips');
+    wrap.innerHTML = '';
+    takeNotes.forEach((n, i) => {
+      const h = takeHarmony[i];
+      const chip = document.createElement('button');
+      chip.className = 'note-chip harmony-chip' + (i === selectedNoteIndex ? ' selected' : '');
+      chip.dataset.index = i;
+      chip.style.minWidth = chipWidth(n.durMs);   // follows the melody note's length
+      const note = document.createElement('span');
+      note.className = 'chip-note';
+      note.textContent = h != null ? noteName(h) : '—';
+      const interval = document.createElement('span');
+      interval.className = 'chip-interval';
+      interval.textContent = h != null ? intervalTag(n.midi, h) : '';
+      chip.appendChild(note);
+      chip.appendChild(interval);
+      chip.addEventListener('click', () => selectHarmonyNote(i));
+      wrap.appendChild(chip);
+    });
+  }
+
   function renderNoteEditor() {
-    const editor = document.getElementById('noteEditor');
-    if (selectedNoteIndex == null || !takeNotes[selectedNoteIndex]) { editor.hidden = true; return; }
-    editor.hidden = false;
-    document.getElementById('editorNoteName').textContent = noteName(takeNotes[selectedNoteIndex].midi);
-    document.getElementById('editorLyric').value = takeLyrics[selectedNoteIndex] || '';
-    document.getElementById('editorLength').textContent =
-      (takeNotes[selectedNoteIndex].durMs / 1000).toFixed(2) + 's';
-    const h = takeHarmony[selectedNoteIndex];
+    const has = selectedNoteIndex != null && !!takeNotes[selectedNoteIndex];
+    const note = has ? takeNotes[selectedNoteIndex] : null;
+    document.getElementById('editorNoteName').textContent = has ? noteName(note.midi) : '—';
+    document.getElementById('editorLyric').value = has ? (takeLyrics[selectedNoteIndex] || '') : '';
+    document.getElementById('editorLength').textContent = has ? (note.durMs / 1000).toFixed(2) + 's' : '—';
+    const h = has ? takeHarmony[selectedNoteIndex] : null;
     document.getElementById('editorHarmony').textContent = h != null
-      ? `${noteName(h)} (${intervalTag(takeNotes[selectedNoteIndex].midi, h)})`
+      ? `${noteName(h)} (${intervalTag(note.midi, h)})`
       : '—';
+    // With nothing picked there is nothing to nudge, so the controls stay
+    // visible (the section is collapsible, not conditional) but inert.
+    document.querySelectorAll('#noteEditor .editor-body button, #noteEditor .editor-lyric')
+      .forEach((el) => { el.disabled = !has; });
+    document.querySelectorAll('#harmonyEditor .editor-body button')
+      .forEach((el) => { el.disabled = h == null; });
   }
 
   function selectNote(index) {
@@ -2260,6 +2317,18 @@
     if (selectedNoteIndex != null) {
       ensureAudio();
       startVoice(takeNotes[selectedNoteIndex].midi, 0.26); // hear what you're editing
+    }
+    renderTake();
+  }
+
+  // Tapping a harmony chip picks that note too, but plays the harmony pitch —
+  // the way to hear your own part one note at a time.
+  function selectHarmonyNote(index) {
+    stopTakePlayback();
+    selectedNoteIndex = selectedNoteIndex === index ? null : index;
+    if (selectedNoteIndex != null && takeHarmony[selectedNoteIndex] != null) {
+      ensureAudio();
+      startVoice(takeHarmony[selectedNoteIndex], 0.26);
     }
     renderTake();
   }
@@ -2319,6 +2388,7 @@
     selectedNoteIndex = null;
     if (!takeNotes.length) {
       document.getElementById('transcriptCard').hidden = true;
+      document.getElementById('harmonyCard').hidden = true;
       document.getElementById('playbackCard').hidden = true;
       setRecStatus('Ready when you are');
       return;
@@ -2339,6 +2409,7 @@
     stopTakePlayback();
     if (!takeNotes.length) {
       document.getElementById('transcriptCard').hidden = true;
+      document.getElementById('harmonyCard').hidden = true;
       document.getElementById('playbackCard').hidden = true;
       setRecStatus("Didn't catch any notes — try singing a bit louder or longer");
       return;
@@ -2363,6 +2434,7 @@
     syncLyricsInput();
     const hasNotes = takeNotes.length > 0;
     document.getElementById('transcriptCard').hidden = !hasNotes;
+    document.getElementById('harmonyCard').hidden = !hasNotes;
     document.getElementById('playbackCard').hidden = !hasNotes;
     if (!hasNotes) {
       setRecStatus("Didn't catch any notes — try singing a bit louder or longer");
@@ -2375,11 +2447,20 @@
     setRecStatus(`Got ${takeNotes.length} note${takeNotes.length === 1 ? '' : 's'} — tap any note to fix it`);
   }
 
+  // Highlight follows the line being played: the melody row, the harmony row,
+  // or both when they sound together.
   function highlightChip(index, mode) {
-    document.querySelectorAll('#noteChips .note-chip').forEach((c) => c.classList.remove('active', 'active-harm'));
+    document.querySelectorAll('#noteChips .note-chip, #harmonyChips .note-chip')
+      .forEach((c) => c.classList.remove('active', 'active-harm'));
     if (index == null) return;
-    const el = document.querySelector(`#noteChips .note-chip[data-index="${index}"]`);
-    if (el) el.classList.add(mode === 'harmony' ? 'active-harm' : 'active');
+    if (mode !== 'harmony') {
+      const el = document.querySelector(`#noteChips .note-chip[data-index="${index}"]`);
+      if (el) el.classList.add('active');
+    }
+    if (mode !== 'melody') {
+      const el = document.querySelector(`#harmonyChips .note-chip[data-index="${index}"]`);
+      if (el) el.classList.add('active-harm');
+    }
   }
 
   function stopTakePlayback() {
@@ -2452,6 +2533,7 @@
     selectedNoteIndex = null;
     syncLyricsInput();
     document.getElementById('transcriptCard').hidden = false;
+    document.getElementById('harmonyCard').hidden = false;
     document.getElementById('playbackCard').hidden = false;
     renderTake();
   }
@@ -2595,7 +2677,7 @@
     document.querySelectorAll('#noteEditor .edit-btn[data-scale]').forEach((btn) => {
       btn.addEventListener('click', () => adjustSelectedLength(parseFloat(btn.dataset.scale)));
     });
-    document.querySelectorAll('#noteEditor .edit-btn[data-harm]').forEach((btn) => {
+    document.querySelectorAll('#harmonyEditor .edit-btn[data-harm]').forEach((btn) => {
       btn.addEventListener('click', () => adjustSelectedHarmony(parseInt(btn.dataset.harm, 10)));
     });
     document.getElementById('editorHarmPlayBtn').addEventListener('click', () => {
@@ -2632,6 +2714,7 @@
       document.getElementById('lyricsInput').value = '';
       document.getElementById('lyricHint').textContent = '';
       document.getElementById('transcriptCard').hidden = true;
+      document.getElementById('harmonyCard').hidden = true;
       document.getElementById('playbackCard').hidden = true;
       setRecStatus('Ready when you are');
     });
