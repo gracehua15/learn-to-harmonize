@@ -481,7 +481,11 @@
 
       <div class="card">
         <div class="controls">
-          <div class="field">
+          <div class="field" id="keyField" hidden>
+            <label for="pKeySelect">Key</label>
+            <select id="pKeySelect"></select>
+          </div>
+          <div class="field" id="scaleField" hidden>
             <label for="pScaleSelect">Scale</label>
             <select id="pScaleSelect">
               <option value="major">Major</option>
@@ -1283,6 +1287,7 @@
   // every round, "scale" holds one key and walks its scale in order, playing the
   // scale before each round so the degree can be placed by ear.
   let practiceOrder = 'random';
+  let practiceKeyRoot = 'random';       // 'random' or a tonic pitch class, 0-11
   let practiceScaleStep = 0;
   let practiceFixedKey = null;
   let practiceKey = null;               // {root, type} the current round is drawn from
@@ -1318,8 +1323,12 @@
     });
     document.getElementById('targetsTitle').textContent =
       inKey ? 'Which degrees to practice' : 'Which intervals to practice';
-    // Note order only means something when the answer depends on the key.
-    document.getElementById('orderField').hidden = !inKey;
+    // Key, scale and note order only mean something when the answer depends on
+    // the key. Intervals are the same number of semitones anywhere, so that
+    // drill is simply random across all twelve.
+    ['keyField', 'scaleField', 'orderField'].forEach((id) => {
+      document.getElementById(id).hidden = !inKey;
+    });
   }
 
   function initModeSwitch() {
@@ -1340,6 +1349,21 @@
     const scaleSel = document.getElementById('pScaleSelect');
     scaleSel.value = practiceScaleType;
     scaleSel.addEventListener('change', () => { practiceScaleType = scaleSel.value; });
+
+    const keySel = document.getElementById('pKeySelect');
+    keySel.innerHTML = '';
+    [{ value: 'random', label: 'Random' }]
+      .concat(ROOTS.map((r) => ({ value: String(r.pc), label: r.label })))
+      .forEach((o) => {
+        const opt = document.createElement('option');
+        opt.value = o.value;
+        opt.textContent = o.label;
+        keySel.appendChild(opt);
+      });
+    keySel.value = String(practiceKeyRoot);
+    keySel.addEventListener('change', () => {
+      practiceKeyRoot = keySel.value === 'random' ? 'random' : parseInt(keySel.value, 10);
+    });
 
     const orderSel = document.getElementById('pOrderSelect');
     orderSel.value = practiceOrder;
@@ -1367,10 +1391,7 @@
       document.getElementById('practiceSession').hidden = false;
       // The scale drill stays in one key for the whole session — that is what
       // makes hearing a degree against a tonic possible.
-      practiceFixedKey = {
-        root: ALL_KEY_PCS[Math.floor(Math.random() * ALL_KEY_PCS.length)],
-        type: practiceScaleType,
-      };
+      practiceFixedKey = { root: pickKeyRoot(), type: practiceScaleType };
       practiceScaleStep = 0;
       clearWave();
       generateRound();
@@ -1384,30 +1405,45 @@
   }
 
   // ---- practice: rounds ----
+  // "Random each session" means one key drawn per session, not per round —
+  // otherwise the scale drill has no tonic to hold onto.
+  function pickKeyRoot() {
+    return practiceKeyRoot === 'random'
+      ? ALL_KEY_PCS[Math.floor(Math.random() * ALL_KEY_PCS.length)]
+      : practiceKeyRoot;
+  }
+
   function generateRound() {
-    const scaleWalk = practiceMode === 'inkey' && practiceOrder === 'scale';
-    // In the scale drill the key is fixed for the session and the base note is
-    // the next step up the scale, so the notes come round in order and repeat.
-    const root = scaleWalk
-      ? practiceFixedKey.root
-      : ALL_KEY_PCS[Math.floor(Math.random() * ALL_KEY_PCS.length)]; // a key's tonic pitch class, 0-11
-    const intervals = SCALES[scaleWalk ? practiceFixedKey.type : practiceScaleType];
-    const degree = scaleWalk
-      ? intervals[practiceScaleStep++ % intervals.length]
-      : intervals[Math.floor(Math.random() * intervals.length)]; // scale-degree interval, 0-11
-    // root+degree is folded back into a single pitch class first, THEN placed in a
-    // freely-chosen octave — adding degree on top of an already-picked octave (as a
-    // previous version did) let root+degree overflow up to ~2 octaves above the
-    // selected range, e.g. producing notes well above "B5" when Mid (C3-B5) was picked.
-    const pc = (root + degree) % 12;
+    const inKey = practiceMode === 'inkey';
+    const scaleWalk = inKey && practiceOrder === 'scale';
     // A range is exactly the octave on its label — C4 to C5 for Mid — so a base
-    // note is always where the label says. Every scale note sits in that octave;
-    // the top C is the one that can also land at the upper end.
+    // note is always where the label says.
     const rangeLow = 12 * (practiceRangeStartOctave + 1);
-    practiceBaseMidi = scaleWalk
-      ? scaleTonicMidi(root) + degree     // walks up the scale, then starts over
-      : rangeLow + pc + (pc === 0 && Math.random() < 0.5 ? 12 : 0);
-    practiceKey = { root: root, type: scaleWalk ? practiceFixedKey.type : practiceScaleType };
+
+    if (!inKey) {
+      // An interval is the same number of semitones in any key, so this drill
+      // has no key at all: draw a base note from all twelve.
+      const pc = Math.floor(Math.random() * 12);
+      practiceBaseMidi = rangeLow + pc + (pc === 0 && Math.random() < 0.5 ? 12 : 0);
+      practiceKey = null;
+    } else {
+      // In the scale drill the key is fixed for the session and the base note is
+      // the next step up the scale, so the notes come round in order and repeat.
+      const root = scaleWalk ? practiceFixedKey.root : pickKeyRoot();
+      const type = scaleWalk ? practiceFixedKey.type : practiceScaleType;
+      const intervals = SCALES[type];
+      const degree = scaleWalk
+        ? intervals[practiceScaleStep++ % intervals.length]
+        : intervals[Math.floor(Math.random() * intervals.length)];
+      // root+degree is folded back into a single pitch class first, THEN placed in
+      // an octave — adding degree on top of an already-picked octave (as a previous
+      // version did) let it overflow up to ~2 octaves above the selected range.
+      const pc = (root + degree) % 12;
+      practiceBaseMidi = scaleWalk
+        ? scaleTonicMidi(root) + degree     // walks up the scale, then starts over
+        : rangeLow + pc + (pc === 0 && Math.random() < 0.5 ? 12 : 0);
+      practiceKey = { root: root, type: type };
+    }
     if (practiceMode === 'inkey') {
       // The target is the diatonic note that many scale steps away, so its
       // quality follows the key: a 3rd above C in C major is E (major), but a
