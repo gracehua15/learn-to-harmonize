@@ -491,9 +491,9 @@
           <div class="field">
             <label for="pRangeSelect">Range</label>
             <select id="pRangeSelect">
-              <option value="2">Low (C2–B3)</option>
-              <option value="3" selected>Mid (C3–B4)</option>
-              <option value="4">High (C4–B5)</option>
+              <option value="3">Low (C3–C4)</option>
+              <option value="4" selected>Mid (C4–C5)</option>
+              <option value="5">High (C5–C6)</option>
             </select>
           </div>
         </div>
@@ -582,7 +582,6 @@
             <button class="edit-btn" data-delta="-1">♭ down</button>
             <button class="edit-btn" data-delta="1">♯ up</button>
             <button class="edit-btn" data-delta="12">+8ve</button>
-            <button class="edit-btn" id="editorPlayBtn">▶ Hear</button>
             <button class="edit-btn" id="editorInsertBtn">＋ Insert after</button>
             <button class="edit-btn danger" id="editorDeleteBtn">✕ Remove</button>
           </div>
@@ -621,7 +620,6 @@
             <button class="edit-btn" data-harm="-1">♭ down</button>
             <button class="edit-btn" data-harm="1">♯ up</button>
             <button class="edit-btn" data-harm="12">+8ve</button>
-            <button class="edit-btn" id="editorHarmPlayBtn">▶ Hear</button>
           </div>
         </div>
       </details>
@@ -687,27 +685,44 @@
     if (el) { el.volume = 1; el.play().catch(() => {}); }
   }
   // Every voice's gain node feeds this bus instead of the destination directly.
-  // The raw samples measure only ~0.07-0.09 peak amplitude (see SAMPLE_LEVEL_BOOST
-  // below) rather than clipping guards being unnecessary, a compressor here is
-  // cheap insurance against multiple simultaneous voices (base + harmony) adding
-  // up past 0 dBFS.
-  // Tone controls, kept together so the balance between loud and harsh is
-  // adjustable in one place.
-  const TONE = {
-    compThreshold: -14,   // gentler than a brick limiter: less pumping, less grit
-    compRatio: 6,
-    compKnee: 14,
-    compAttack: 0.012,    // let the hammer transient through instead of squashing it
-    shelfHz: 2200,        // piano "bite" lives here; a shelf tames it musically
-    shelfGain: -10,
-    lowpassHz: 4500,      // and this takes off what the soft clipper adds on top
-    lowpassQ: 0.6,
-    drive: 1.05,          // barely-there saturation; 1.6 was audibly buzzy
-    makeup: 3.4,
+  //
+  // Loudness has to come from clean gain, not from distortion. The trap here is
+  // that a WaveShaper clamps its input to [-1, 1] before looking up the curve,
+  // so any gain that pushes the signal past 1.0 is brick-wall clipped no matter
+  // how soft the curve looks — measured at 10-22% of samples on the previous
+  // settings, which is what "shrill" actually was.
+  //
+  // The fix is to scale into the shaper by 1/HEADROOM and build the curve over
+  // that same widened range, so the shaper behaves as softClip(makeup * signal)
+  // for signals up to HEADROOM/makeup and never reaches the clamp. Below the
+  // knee the curve is exactly linear, so normal playing passes through
+  // untouched; only the hammer transient ever gets rounded off.
+  //
+  // Loudness beyond that has to come from compression, and there is a second
+  // trap there: squeezing hard enough to reach -8 dBFS RMS flattens a piano
+  // note's decay to 0.8 dB over two seconds, which turns it into an organ.
+  // These values sit where all three measure well — 0.4% THD, no clamping, a
+  // 21 dB natural decay, -12 dBFS RMS.
+  const TONE = window.TONE = {   // exposed for console/test inspection
+    compThreshold: -10,   // only the loudest transients and stacked voices
+    compRatio: 14,
+    compKnee: 6,
+    compAttack: 0.0005,   // fast, so attacks are caught rather than passed on to clip
+    compRelease: 0.25,
+    shelfHz: 3500,        // a light touch off the top; -10 dB at 2.2 kHz was muffled
+    shelfGain: -3.5,
+    makeup: 1.35,
+    headroom: 5,          // signal range the shaper handles without clamping
+    knee: 0.85,           // below this the transfer curve is exactly linear
   };
 
-  let masterBus = null, masterGain = null, masterShaper = null;
-  let masterShelf = null, masterLowpass = null;
+  function softClip(u) {
+    const a = Math.abs(u), k = TONE.knee;
+    if (a <= k) return u;
+    return Math.sign(u) * (k + (1 - k) * Math.tanh((a - k) / (1 - k)));
+  }
+
+  let masterBus = null, masterGain = null, masterShaper = null, masterShelf = null;
   function ensureAudio() {
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -716,39 +731,29 @@
       masterBus.knee.value = TONE.compKnee;
       masterBus.ratio.value = TONE.compRatio;
       masterBus.attack.value = TONE.compAttack;
-      masterBus.release.value = 0.22;
-      // These samples are bright, and stacking voices piles their upper
-      // partials on top of each other, which is what reads as shrill. Shelve
-      // the top down before anything downstream amplifies it.
+      masterBus.release.value = TONE.compRelease;
+      // These samples are bright and stacking voices piles their upper partials
+      // on top of each other. A gentle shelf takes the edge off without the
+      // muffling a low-pass causes.
       masterShelf = audioCtx.createBiquadFilter();
       masterShelf.type = 'highshelf';
       masterShelf.frequency.value = TONE.shelfHz;
       masterShelf.gain.value = TONE.shelfGain;
+      // Makeup and the shaper's input scaling folded into one node.
       masterGain = audioCtx.createGain();
-      masterGain.gain.value = TONE.makeup;   // makeup after the limiter
-      // Soft clipper next. A phone speaker responds to average level, not peak,
-      // and piano notes have a big crest factor, so hard limiting alone leaves
-      // them quiet. tanh saturation lifts the average and mathematically caps
-      // the output below full scale, so it can be driven hard without clipping.
+      masterGain.gain.value = TONE.makeup / TONE.headroom;
       masterShaper = audioCtx.createWaveShaper();
-      const curve = new Float32Array(1024);
+      const curve = new Float32Array(4096);
       for (let i = 0; i < curve.length; i++) {
         const x = (i * 2) / (curve.length - 1) - 1;
-        curve[i] = Math.tanh(x * TONE.drive);
+        curve[i] = softClip(x * TONE.headroom);   // x maps to a signal of x*headroom
       }
       masterShaper.curve = curve;
       masterShaper.oversample = '4x';
-      // Saturation always adds harmonics above whatever it is fed; filtering
-      // after it is what keeps the extra loudness from arriving as fizz.
-      masterLowpass = audioCtx.createBiquadFilter();
-      masterLowpass.type = 'lowpass';
-      masterLowpass.frequency.value = TONE.lowpassHz;
-      masterLowpass.Q.value = TONE.lowpassQ;
       masterBus.connect(masterShelf);
       masterShelf.connect(masterGain);
       masterGain.connect(masterShaper);
-      masterShaper.connect(masterLowpass);
-      masterLowpass.connect(audioCtx.destination);
+      masterShaper.connect(audioCtx.destination);
       preloadAllSamples();
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -1257,7 +1262,7 @@
     return `${GENERIC_INTERVAL_NAMES[gap % 12]} ${direction}`;
   }
   let practiceScaleType = 'major';
-  let practiceRangeStartOctave = 3;
+  let practiceRangeStartOctave = 4;   // Mid, C4-C5
   const ALL_KEY_PCS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]; // rounds always draw from every key
   // Two exercises, two pools. "interval" asks for a fixed interval and the key
   // is irrelevant to the answer; "inkey" asks for a scale degree and the answer's
@@ -1362,11 +1367,11 @@
     // previous version did) let root+degree overflow up to ~2 octaves above the
     // selected range, e.g. producing notes well above "B5" when Mid (C3-B5) was picked.
     const pc = (root + degree) % 12;
-    // Each range spans 2 octaves (not 3) — e.g. Mid stays within C3-B4 — so the
-    // "High" end of a range doesn't creep up to a full octave above what's labeled.
-    const octave = practiceRangeStartOctave + Math.floor(Math.random() * 2);
-
-    practiceBaseMidi = 12 * (octave + 1) + pc;
+    // A range is exactly the octave on its label — C4 to C5 for Mid — so a base
+    // note is always where the label says. Every scale note sits in that octave;
+    // the top C is the one that can also land at the upper end.
+    const rangeLow = 12 * (practiceRangeStartOctave + 1);
+    practiceBaseMidi = rangeLow + pc + (pc === 0 && Math.random() < 0.5 ? 12 : 0);
     practiceKey = { root: root, type: practiceScaleType };
     if (practiceMode === 'inkey') {
       // The target is the diatonic note that many scale steps away, so its
@@ -2750,11 +2755,6 @@
     document.querySelectorAll('#noteEditor .edit-btn[data-delta]').forEach((btn) => {
       btn.addEventListener('click', () => adjustSelectedNote(parseInt(btn.dataset.delta, 10)));
     });
-    document.getElementById('editorPlayBtn').addEventListener('click', () => {
-      if (selectedNoteIndex == null) return;
-      ensureAudio();
-      startVoice(takeNotes[selectedNoteIndex].midi, 0.26);
-    });
     document.getElementById('editorInsertBtn').addEventListener('click', () => insertNote(selectedNoteIndex));
     document.getElementById('editorDeleteBtn').addEventListener('click', deleteSelectedNote);
     document.querySelectorAll('#noteEditor .edit-btn[data-scale]').forEach((btn) => {
@@ -2762,11 +2762,6 @@
     });
     document.querySelectorAll('#harmonyEditor .edit-btn[data-harm]').forEach((btn) => {
       btn.addEventListener('click', () => adjustSelectedHarmony(parseInt(btn.dataset.harm, 10)));
-    });
-    document.getElementById('editorHarmPlayBtn').addEventListener('click', () => {
-      if (selectedNoteIndex == null || takeHarmony[selectedNoteIndex] == null) return;
-      ensureAudio();
-      startVoice(takeHarmony[selectedNoteIndex], 0.24);
     });
     document.getElementById('playSongBtn').addEventListener('click', () => playLines(songLines, 'both'));
     document.getElementById('sensitivitySelect').addEventListener('change', resegmentTake);
