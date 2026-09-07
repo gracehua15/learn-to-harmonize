@@ -658,17 +658,20 @@
   // below) rather than clipping guards being unnecessary, a compressor here is
   // cheap insurance against multiple simultaneous voices (base + harmony) adding
   // up past 0 dBFS.
-  let masterBus = null;
+  let masterBus = null, masterGain = null;
   function ensureAudio() {
     if (!audioCtx) {
       audioCtx = new (window.AudioContext || window.webkitAudioContext)();
       masterBus = audioCtx.createDynamicsCompressor();
-      masterBus.threshold.value = -12;
-      masterBus.knee.value = 12;
-      masterBus.ratio.value = 4;
+      masterBus.threshold.value = -6;
+      masterBus.knee.value = 8;
+      masterBus.ratio.value = 6;      // more of a limiter than a compressor now
       masterBus.attack.value = 0.003;
       masterBus.release.value = 0.15;
-      masterBus.connect(audioCtx.destination);
+      masterGain = audioCtx.createGain();
+      masterGain.gain.value = 1.4;    // makeup after the limiter, leaving headroom for the hottest samples
+      masterBus.connect(masterGain);
+      masterGain.connect(audioCtx.destination);
       preloadAllSamples();
     }
     if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -768,7 +771,7 @@
   // a full-scale synth tone — landed voices at roughly 2-3% of full volume.
   // Boost by a fixed factor to bring a single voice up to an audible level; the
   // compressor on masterBus keeps stacked voices from adding up past 0 dBFS.
-  const SAMPLE_LEVEL_BOOST = 10;
+  const SAMPLE_LEVEL_BOOST = 20;
 
   const NOTE_RELEASE = 0.09;             // key-lift fade when a note is given an end time
 
