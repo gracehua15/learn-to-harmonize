@@ -480,10 +480,10 @@
         <div class="grid-title">Exercise</div>
         <div class="mode-switch" id="modeSwitch">
           <button class="mode-btn active" data-mode="interval">
-            Intervals<span>sing a set interval — key doesn't matter</span>
+            Note Harmonization<span>Sing a set interval to a given note</span>
           </button>
           <button class="mode-btn" data-mode="inkey">
-            In key<span>sing the degree — major or minor?</span>
+            Scale Harmonization<span>Sing the right harmony note, within the constraints of a scale</span>
           </button>
         </div>
       </div>
@@ -504,7 +504,7 @@
           <div class="field" id="orderField" hidden>
             <label for="pOrderSelect">Note order</label>
             <select id="pOrderSelect">
-              <option value="random" selected>Truly random</option>
+              <option value="random" selected>Random</option>
               <option value="scale">Scale on repeat</option>
             </select>
           </div>
@@ -1292,7 +1292,7 @@
   }
   let practiceScaleType = 'major';
   let practiceRangeStartOctave = 3;   // Low, C3-C4
-  const ALL_KEY_PCS = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]; // rounds always draw from every key
+  const ALL_PITCH_CLASSES = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11];
   // Two exercises, two pools. "interval" asks for a fixed interval and the key
   // is irrelevant to the answer; "inkey" asks for a scale degree and the answer's
   // quality depends on the key, which is the whole point of that drill.
@@ -1303,12 +1303,12 @@
   const enabledDegrees = new Set();     // signed scale steps, e.g. +2 = a 3rd above
   // Which base notes the interval drill may draw from. All twelve to start —
   // unlike the interval pool, an empty note pool is never a useful default.
-  const enabledBaseNotes = new Set(ALL_KEY_PCS);
+  const enabledBaseNotes = new Set(ALL_PITCH_CLASSES);
   // Only the in-key drill has a note order: "random" draws a fresh key and note
   // every round, "scale" holds one key and walks its scale in order, playing the
   // scale before each round so the degree can be placed by ear.
   let practiceOrder = 'random';
-  let practiceKeyRoot = 'random';       // 'random' or a tonic pitch class, 0-11
+  let practiceKeyRoot = 0;              // tonic pitch class, 0-11 — always chosen, never random
   let practiceScaleStep = 0;
   let practiceFixedKey = null;
   let practiceKey = null;               // {root, type} the current round is drawn from
@@ -1404,25 +1404,21 @@
     document.getElementById('notePoolAllBtn').addEventListener('click', () => {
       const turnOn = enabledBaseNotes.size !== 12;
       enabledBaseNotes.clear();
-      if (turnOn) ALL_KEY_PCS.forEach((pc) => enabledBaseNotes.add(pc));
+      if (turnOn) ALL_PITCH_CLASSES.forEach((pc) => enabledBaseNotes.add(pc));
       document.getElementById('setupError').hidden = true;
       renderNotePool();
     });
 
     const keySel = document.getElementById('pKeySelect');
     keySel.innerHTML = '';
-    [{ value: 'random', label: 'Random' }]
-      .concat(ROOTS.map((r) => ({ value: String(r.pc), label: r.label })))
-      .forEach((o) => {
-        const opt = document.createElement('option');
-        opt.value = o.value;
-        opt.textContent = o.label;
-        keySel.appendChild(opt);
-      });
-    keySel.value = String(practiceKeyRoot);
-    keySel.addEventListener('change', () => {
-      practiceKeyRoot = keySel.value === 'random' ? 'random' : parseInt(keySel.value, 10);
+    ROOTS.forEach((r) => {
+      const opt = document.createElement('option');
+      opt.value = String(r.pc);
+      opt.textContent = r.label;
+      keySel.appendChild(opt);
     });
+    keySel.value = String(practiceKeyRoot);
+    keySel.addEventListener('change', () => { practiceKeyRoot = parseInt(keySel.value, 10); });
 
     const orderSel = document.getElementById('pOrderSelect');
     orderSel.value = practiceOrder;
@@ -1456,7 +1452,7 @@
       document.getElementById('practiceSession').hidden = false;
       // The scale drill stays in one key for the whole session — that is what
       // makes hearing a degree against a tonic possible.
-      practiceFixedKey = { root: pickKeyRoot(), type: practiceScaleType };
+      practiceFixedKey = { root: practiceKeyRoot, type: practiceScaleType };
       practiceScaleStep = 0;
       clearWave();
       generateRound();
@@ -1470,14 +1466,6 @@
   }
 
   // ---- practice: rounds ----
-  // "Random each session" means one key drawn per session, not per round —
-  // otherwise the scale drill has no tonic to hold onto.
-  function pickKeyRoot() {
-    return practiceKeyRoot === 'random'
-      ? ALL_KEY_PCS[Math.floor(Math.random() * ALL_KEY_PCS.length)]
-      : practiceKeyRoot;
-  }
-
   function generateRound() {
     const inKey = practiceMode === 'inkey';
     const scaleWalk = inKey && practiceOrder === 'scale';
@@ -1495,7 +1483,7 @@
     } else {
       // In the scale drill the key is fixed for the session and the base note is
       // the next step up the scale, so the notes come round in order and repeat.
-      const root = scaleWalk ? practiceFixedKey.root : pickKeyRoot();
+      const root = scaleWalk ? practiceFixedKey.root : practiceKeyRoot;
       const type = scaleWalk ? practiceFixedKey.type : practiceScaleType;
       const intervals = SCALES[type];
       const degree = scaleWalk
