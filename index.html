@@ -63,6 +63,9 @@
 
   /* Controls */
   .controls { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+  /* Any author rule that sets `display` beats the browser's own [hidden] rule,
+     so `.field { display: flex }` was leaving hidden fields on screen. */
+  [hidden] { display: none !important; }
   .field { display: flex; flex-direction: column; gap: 6px; }
   .field label { font-size: 11px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted); }
   .field select {
@@ -172,6 +175,11 @@
   /* Practice: toggle grids (keys / intervals) */
   .toggle-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .toggle-grid.intervals { grid-template-columns: repeat(2, 1fr); }
+  .toggle-grid.notes { grid-template-columns: repeat(4, 1fr); }
+  .pool-all {
+    float: right; font: inherit; font-size: 11px; text-transform: none; letter-spacing: 0;
+    background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0;
+  }
   .setup-error { color: #ff9a9a; font-size: 13px; font-weight: 700; text-align: center; margin-top: 10px; }
   .mode-switch { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .mode-btn {
@@ -509,6 +517,14 @@
             </select>
           </div>
         </div>
+      </div>
+
+      <div class="card" id="notePoolCard" hidden>
+        <div class="grid-title">
+          Which notes to include
+          <button class="pool-all" id="notePoolAllBtn">all</button>
+        </div>
+        <div class="toggle-grid notes" id="notePoolGrid"></div>
       </div>
 
       <div class="card">
@@ -1285,6 +1301,9 @@
   // everything you don't want.
   const enabledIntervals = new Set();   // semitones, e.g. 4 = major 3rd above
   const enabledDegrees = new Set();     // signed scale steps, e.g. +2 = a 3rd above
+  // Which base notes the interval drill may draw from. All twelve to start —
+  // unlike the interval pool, an empty note pool is never a useful default.
+  const enabledBaseNotes = new Set(ALL_KEY_PCS);
   // Only the in-key drill has a note order: "random" draws a fresh key and note
   // every round, "scale" holds one key and walks its scale in order, playing the
   // scale before each round so the degree can be placed by ear.
@@ -1299,6 +1318,32 @@
   let practiceSteps = 0;                // signed scale steps asked for this round
   let lastDetectedMidi = null;
   let streak = 0;
+
+  function renderNotePool() {
+    const grid = document.getElementById('notePoolGrid');
+    grid.innerHTML = '';
+    NOTE_NAMES.forEach((name, pc) => {
+      const btn = document.createElement('button');
+      btn.className = 'toggle-btn' + (enabledBaseNotes.has(pc) ? ' active' : '');
+      btn.dataset.pc = pc;
+      btn.textContent = name;
+      btn.addEventListener('click', () => {
+        if (enabledBaseNotes.has(pc)) {
+          enabledBaseNotes.delete(pc);
+          btn.classList.remove('active');
+        } else {
+          enabledBaseNotes.add(pc);
+          btn.classList.add('active');
+          document.getElementById('setupError').hidden = true;
+        }
+        document.getElementById('notePoolAllBtn').textContent =
+          enabledBaseNotes.size === 12 ? 'none' : 'all';
+      });
+      grid.appendChild(btn);
+    });
+    document.getElementById('notePoolAllBtn').textContent =
+      enabledBaseNotes.size === 12 ? 'none' : 'all';
+  }
 
   function renderPracticeTargets() {
     const inKey = practiceMode === 'inkey';
@@ -1331,6 +1376,9 @@
     ['keyField', 'scaleField', 'orderField'].forEach((id) => {
       document.getElementById(id).hidden = !inKey;
     });
+    // The in-key drill takes its base notes from the key's scale, so choosing
+    // them by hand only makes sense for the interval drill.
+    document.getElementById('notePoolCard').hidden = inKey;
   }
 
   function initModeSwitch() {
@@ -1345,12 +1393,21 @@
       });
     });
     renderPracticeTargets();
+    renderNotePool();
   }
 
   function initPracticeControls() {
     const scaleSel = document.getElementById('pScaleSelect');
     scaleSel.value = practiceScaleType;
     scaleSel.addEventListener('change', () => { practiceScaleType = scaleSel.value; });
+
+    document.getElementById('notePoolAllBtn').addEventListener('click', () => {
+      const turnOn = enabledBaseNotes.size !== 12;
+      enabledBaseNotes.clear();
+      if (turnOn) ALL_KEY_PCS.forEach((pc) => enabledBaseNotes.add(pc));
+      document.getElementById('setupError').hidden = true;
+      renderNotePool();
+    });
 
     const keySel = document.getElementById('pKeySelect');
     keySel.innerHTML = '';
@@ -1381,11 +1438,16 @@
 
     document.getElementById('startPracticeBtn').addEventListener('click', () => {
       const pool = practiceMode === 'inkey' ? enabledDegrees : enabledIntervals;
+      const err = document.getElementById('setupError');
       if (pool.size === 0) {
-        const err = document.getElementById('setupError');
         err.textContent = practiceMode === 'inkey'
           ? 'Pick at least one degree to practice.'
           : 'Pick at least one interval to practice.';
+        err.hidden = false;
+        return;
+      }
+      if (practiceMode !== 'inkey' && enabledBaseNotes.size === 0) {
+        err.textContent = 'Pick at least one note to start from.';
         err.hidden = false;
         return;
       }
@@ -1425,8 +1487,9 @@
 
     if (!inKey) {
       // An interval is the same number of semitones in any key, so this drill
-      // has no key at all: draw a base note from all twelve.
-      const pc = Math.floor(Math.random() * 12);
+      // has no key at all — just the notes you chose to start from.
+      const notes = Array.from(enabledBaseNotes);
+      const pc = notes[Math.floor(Math.random() * notes.length)];
       practiceBaseMidi = rangeLow + pc + (pc === 0 && Math.random() < 0.5 ? 12 : 0);
       practiceKey = null;
     } else {
