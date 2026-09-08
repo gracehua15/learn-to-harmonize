@@ -273,6 +273,42 @@
   .feedback.nudge { color: var(--harm-ink); font-weight: 700; font-size: 13.5px; }
   .mic-error { text-align: center; font-size: 12px; color: var(--danger); margin-top: 10px; }
   .streak { text-align: center; font-size: 13px; color: var(--muted); margin-top: 8px; }
+  .round-actions { display: grid; grid-template-columns: 1fr 1.4fr; gap: 8px; }
+  .big-btn:disabled { opacity: 0.4; }
+
+  /* Practice tracking: who is singing, and the record they are building */
+  .signin-row { display: flex; gap: 8px; align-items: stretch; }
+  .signin-row .lyrics-input { flex: 1; }
+  .signin-row .big-btn { width: auto; flex: 0 0 auto; padding: 9px 18px; }
+  .signin-note { font-size: 11px; color: var(--muted); margin-top: 8px; }
+  .signin-note.error { color: var(--danger); font-weight: 700; }
+  .user-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .user-name { font-size: 16px; font-weight: 800; }
+  .user-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .stat-row { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin-top: 12px; }
+  .stat {
+    background: var(--card2); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 8px; text-align: center;
+  }
+  .stat .stat-val { font-size: 20px; font-weight: 800; font-variant-numeric: tabular-nums; }
+  .stat .stat-label {
+    font-size: 10px; text-transform: uppercase; letter-spacing: 0.6px;
+    color: var(--muted); margin-top: 2px;
+  }
+  .stat.streak-stat .stat-val { color: var(--accent-ink); }
+  .day-list { margin-top: 12px; display: flex; flex-direction: column; gap: 4px; }
+  .day-row {
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; font-variant-numeric: tabular-nums;
+  }
+  .day-row .day-date { color: var(--muted); flex: 0 0 76px; }
+  .day-row.today .day-date { color: var(--accent-ink); font-weight: 700; }
+  /* The bar is the day at a glance: how much was sung, how much of it landed. */
+  .day-bar { flex: 1; height: 8px; border-radius: 999px; background: var(--card2); overflow: hidden; }
+  .day-bar span { display: block; height: 100%; background: var(--base-color); }
+  .day-row .day-count { flex: 0 0 auto; color: var(--muted); }
+  .day-row .day-count strong { color: var(--text); }
+  .day-empty { font-size: 12px; color: var(--muted); }
 
   /* Play: sing a melody, transcribe it, harmonize it */
   .rec-btn.recording {
@@ -491,6 +527,31 @@
 
   <div id="practiceView" hidden>
     <div id="practiceSetup">
+      <div class="card" id="userCard" hidden>
+        <div id="signInBox">
+          <div class="grid-title">Pick a name to track your practice</div>
+          <div class="signin-row">
+            <input type="text" id="usernameInput" class="lyrics-input" maxlength="24"
+                   placeholder="your name" autocomplete="off" spellcheck="false">
+            <button class="big-btn small start-btn" id="signInBtn">Start</button>
+          </div>
+          <div class="signin-note" id="signInNote">
+            No password — the name is how your streak finds you again.
+          </div>
+        </div>
+        <div id="signedInBox" hidden>
+          <div class="user-row">
+            <div>
+              <div class="user-name" id="userName">—</div>
+              <div class="user-sub" id="userSub"></div>
+            </div>
+            <button class="line-btn" id="signOutBtn">switch</button>
+          </div>
+          <div class="stat-row" id="statRow"></div>
+          <div class="day-list" id="dayList"></div>
+        </div>
+      </div>
+
       <div class="card">
         <div class="grid-title">Exercise</div>
         <div class="mode-switch" id="modeSwitch">
@@ -577,7 +638,10 @@
       </div>
 
       <div class="card">
-        <button class="big-btn" id="newRoundBtn">New round</button>
+        <div class="round-actions">
+          <button class="big-btn" id="skipBtn">Skip</button>
+          <button class="big-btn start-btn" id="nextBtn" disabled>Next →</button>
+        </div>
         <div class="streak" id="streakDisplay">Streak: 0</div>
       </div>
     </div>
@@ -1323,6 +1387,7 @@
   // every round, "scale" holds one key and walks its scale in order, playing the
   // scale before each round so the degree can be placed by ear.
   let practiceOrder = 'random';
+  let practiceFirstRound = true;        // the tonic opens a scale session
   let practiceKeyRoot = 0;              // tonic pitch class, 0-11 — always chosen, never random
   let practiceScaleStep = 0;
   let practiceFixedKey = null;
@@ -1411,6 +1476,180 @@
     renderNotePool();
   }
 
+  // ---- practice: who is singing, and what they have done ----
+  // Every call here is best-effort. The app is a static page that happens to
+  // have a server; if the API isn't there — opened from a plain file server, or
+  // the database is down — practice works exactly as before, just untracked.
+  const USER_STORE = 'harmonize.user';
+  let practiceUser = null;              // { id, username }
+  let trackingAvailable = false;
+  let roundRecorded = false;            // one attempt per round, however it ends
+
+  function localDay(d) {
+    const t = d || new Date();
+    const p = (n) => String(n).padStart(2, '0');
+    return `${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}`;
+  }
+
+  function loadStoredUser() {
+    try {
+      const raw = localStorage.getItem(USER_STORE);
+      const parsed = raw ? JSON.parse(raw) : null;
+      if (parsed && Number.isInteger(parsed.id) && parsed.username) return parsed;
+    } catch (e) { /* private mode, cleared storage — just sign in again */ }
+    return null;
+  }
+  function storeUser(user) {
+    try {
+      if (user) localStorage.setItem(USER_STORE, JSON.stringify(user));
+      else localStorage.removeItem(USER_STORE);
+    } catch (e) { /* nothing to do; the session still works, it just won't persist */ }
+  }
+
+  async function api(path, options) {
+    const res = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options));
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body.error || `request failed (${res.status})`);
+    return body;
+  }
+
+  async function initTracking() {
+    try {
+      const health = await api('/api/health');
+      trackingAvailable = !!health.tracking;
+    } catch (e) {
+      trackingAvailable = false;
+    }
+    document.getElementById('userCard').hidden = !trackingAvailable;
+    if (!trackingAvailable) return;
+    practiceUser = loadStoredUser();
+    renderUserBox();
+    if (practiceUser) refreshStats();
+  }
+
+  function renderUserBox() {
+    const signedIn = !!practiceUser;
+    document.getElementById('signInBox').hidden = signedIn;
+    document.getElementById('signedInBox').hidden = !signedIn;
+    if (signedIn) document.getElementById('userName').textContent = practiceUser.username;
+  }
+
+  function setSignInNote(text, isError) {
+    const el = document.getElementById('signInNote');
+    el.textContent = text;
+    el.className = 'signin-note' + (isError ? ' error' : '');
+  }
+
+  async function signIn() {
+    const input = document.getElementById('usernameInput');
+    const username = input.value.trim();
+    if (!username) { setSignInNote('Type a name first.', true); return; }
+    const btn = document.getElementById('signInBtn');
+    btn.disabled = true;
+    try {
+      const { user, created } = await api('/api/user', {
+        method: 'POST',
+        body: JSON.stringify({ username }),
+      });
+      practiceUser = user;
+      storeUser(user);
+      renderUserBox();
+      // Names are unique, so an existing one isn't a new person — it's this
+      // person coming back, and saying so beats silently adopting a stranger's
+      // streak without a word.
+      document.getElementById('userSub').textContent = created
+        ? 'Tracking from today'
+        : 'Welcome back — picking up where you left off';
+      await refreshStats();
+    } catch (e) {
+      setSignInNote(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function signOut() {
+    practiceUser = null;
+    storeUser(null);
+    document.getElementById('usernameInput').value = '';
+    setSignInNote('No password — the name is how your streak finds you again.', false);
+    renderUserBox();
+  }
+
+  function statTile(value, label, cls) {
+    return `<div class="stat ${cls || ''}"><div class="stat-val">${value}</div>` +
+           `<div class="stat-label">${label}</div></div>`;
+  }
+
+  function dayLabel(day, today) {
+    if (day === today) return 'Today';
+    const d = new Date(day + 'T00:00:00');
+    const yest = new Date(today + 'T00:00:00');
+    yest.setDate(yest.getDate() - 1);
+    if (day === localDay(yest)) return 'Yesterday';
+    return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  }
+
+  async function refreshStats() {
+    if (!practiceUser || !trackingAvailable) return;
+    const today = localDay();
+    let stats;
+    try {
+      stats = await api(`/api/stats?userId=${practiceUser.id}&today=${today}`);
+    } catch (e) {
+      return;                           // a failed refresh must never block practising
+    }
+    const pct = stats.totals.total
+      ? Math.round((100 * stats.totals.correct) / stats.totals.total) + '%'
+      : '—';
+    document.getElementById('statRow').innerHTML =
+      statTile(stats.streak + (stats.streak === 1 ? ' day' : ' days'), 'Streak', 'streak-stat') +
+      statTile(`${stats.today.correct}/${stats.today.total}`, 'Today') +
+      statTile(pct, 'All-time right');
+
+    const list = document.getElementById('dayList');
+    const days = stats.days.slice(0, 7);
+    if (!days.length) {
+      list.innerHTML = '<div class="day-empty">No notes yet — start a session below.</div>';
+      return;
+    }
+    const busiest = Math.max(...days.map((d) => d.total), 1);
+    list.innerHTML = days.map((d) => {
+      const width = Math.round((100 * d.correct) / busiest);
+      const bar = Math.round((100 * d.total) / busiest);
+      return `<div class="day-row${d.day === today ? ' today' : ''}">` +
+        `<span class="day-date">${dayLabel(d.day, today)}</span>` +
+        `<span class="day-bar" style="max-width:${bar}%"><span style="width:${d.total ? Math.round((100 * d.correct) / d.total) : 0}%"></span></span>` +
+        `<span class="day-count"><strong>${d.correct}</strong> of ${d.total} right</span>` +
+        `</div>`;
+    }).join('');
+  }
+
+  // A round produces exactly one attempt: solved, or skipped. Recording is
+  // fire-and-forget so a slow network never sits between rounds.
+  function recordAttempt(correct, skipped) {
+    if (roundRecorded || !practiceUser || !trackingAvailable) return;
+    roundRecorded = true;
+    api('/api/attempt', {
+      method: 'POST',
+      body: JSON.stringify({
+        userId: practiceUser.id,
+        day: localDay(),
+        correct: correct,
+        skipped: skipped,
+        exercise: practiceMode,
+        prompt: practiceAskLabel,
+        baseMidi: practiceBaseMidi,
+      }),
+    }).then(refreshStats).catch(() => { /* offline: the round still counted on screen */ });
+  }
+
+  function setRoundButtons() {
+    // Next is the reward for getting it: it only opens once the note is sung.
+    document.getElementById('nextBtn').disabled = !roundSolved;
+    document.getElementById('skipBtn').disabled = roundSolved;
+  }
+
   function initPracticeControls() {
     const scaleSel = document.getElementById('pScaleSelect');
     scaleSel.value = practiceScaleType;
@@ -1445,7 +1684,22 @@
 
     document.getElementById('playBaseBtn').addEventListener('click', playPracticeBase);
     document.getElementById('playScaleBtn').addEventListener('click', playPracticeScale);
-    document.getElementById('newRoundBtn').addEventListener('click', generateRound);
+    document.getElementById('signInBtn').addEventListener('click', signIn);
+    document.getElementById('usernameInput').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') signIn();
+    });
+    document.getElementById('signOutBtn').addEventListener('click', signOut);
+    document.getElementById('nextBtn').addEventListener('click', () => {
+      if (!roundSolved) return;         // Next is earned, not a second Skip
+      generateRound();
+    });
+    document.getElementById('skipBtn').addEventListener('click', () => {
+      if (roundSolved) return;
+      recordAttempt(false, true);
+      streak = 0;                       // the run of right answers ends here
+      document.getElementById('streakDisplay').textContent = `Streak: ${streak}`;
+      generateRound();
+    });
 
     document.getElementById('startPracticeBtn').addEventListener('click', () => {
       const pool = practiceMode === 'inkey' ? enabledDegrees : enabledIntervals;
@@ -1469,6 +1723,7 @@
       // makes hearing a degree against a tonic possible.
       practiceFixedKey = { root: practiceKeyRoot, type: practiceScaleType };
       practiceScaleStep = 0;
+      practiceFirstRound = true;
       clearWave();
       generateRound();
       startListening(); // auto-start — same click, so still a real user gesture
@@ -1501,9 +1756,16 @@
       const root = scaleWalk ? practiceFixedKey.root : practiceKeyRoot;
       const type = scaleWalk ? practiceFixedKey.type : practiceScaleType;
       const intervals = SCALES[type];
-      const degree = scaleWalk
-        ? intervals[practiceScaleStep++ % intervals.length]
-        : intervals[Math.floor(Math.random() * intervals.length)];
+      // Whatever the order, a session opens on the tonic: it is the note every
+      // other degree is heard against, so starting anywhere else asks you to
+      // place a degree in a key you haven't heard the bottom of yet.
+      const degree = practiceFirstRound
+        ? 0
+        : scaleWalk
+          ? intervals[practiceScaleStep % intervals.length]
+          : intervals[Math.floor(Math.random() * intervals.length)];
+      if (scaleWalk) practiceScaleStep = practiceFirstRound ? 1 : practiceScaleStep + 1;
+      practiceFirstRound = false;
       // root+degree is folded back into a single pitch class first, THEN placed in
       // an octave — adding degree on top of an already-picked octave (as a previous
       // version did) let it overflow up to ~2 octaves above the selected range.
@@ -1550,6 +1812,8 @@
     fb.className = 'feedback';
     document.getElementById('pitchReadout').textContent = '–';
     clearWave();
+    roundRecorded = false;
+    setRoundButtons();
     playPracticeBase();
     resumePitchDetection(); // no-op on the very first round, before the mic has started
   }
@@ -1701,6 +1965,8 @@
 
   function markCorrect() {
     roundSolved = true;
+    recordAttempt(true, false);
+    setRoundButtons();
     streak++;
     document.getElementById('streakDisplay').textContent = `Streak: ${streak}`;
     const fb = document.getElementById('practiceFeedback');
@@ -2979,6 +3245,7 @@
   rebuildAll();
   initModeSwitch();
   initPracticeControls();
+  initTracking();
   initPlayControls();
   clearWave();
 })();

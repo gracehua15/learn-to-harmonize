@@ -1,0 +1,14 @@
+{
+  "name": "learn-to-harmonize",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Learn to hear and sing harmony intervals",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": { "node": ">=18" },
+  "dependencies": {
+    "pg": "^8.13.1"
+  }
+}
