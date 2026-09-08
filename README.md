@@ -32,6 +32,19 @@ over HTTP, even locally, avoids that.)
 Notes are real recorded piano samples (not synthesized), pitch-shifted onto
 whichever note is pressed. See `samples/piano/CREDITS.md` for licensing.
 
+## Tools
+
+`tools/melody_to_piano.py` renders the melody line out of a
+[POP909](https://github.com/music-x-lab/POP909-Dataset) song folder using the
+same piano samples and voice engine the app uses in the browser:
+
+```
+python3 tools/melody_to_piano.py path/to/POP909/001 -o melody.wav --json melody.json
+```
+
+The JSON note list (`time`, `duration`, `midi`, `name`) is in the shape the
+app's scheduler already wants, so it can drive playback directly.
+
 ## Roadmap
 
 Built as a plain web app first; the plan is to wrap it with
