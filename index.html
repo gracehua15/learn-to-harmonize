@@ -7,20 +7,31 @@
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; user-select: none; }
   :root {
-    --bg: #100c1f;
-    --card: #1b1533;
-    --card2: #241c42;
-    --accent: #b892ff;
-    --accent2: #6ee7d8;
-    --base-color: #34d399;
-    --harm-color: #fbbf24;
-    --text: #f4f2ff;
-    --muted: #9a92c4;
-    --border: #2f2755;
+    color-scheme: light;
+    --bg: #ece5d6;          /* warm paper */
+    --card: #f8f3e8;        /* raised */
+    --card2: #e5ddcb;       /* recessed: inputs, unselected buttons */
+    --accent: #5b8f6f;      /* sage — the app's chrome */
+    --accent2: #2f6b60;     /* teal — secondary highlights */
+    --base-color: #38714f;  /* the base note */
+    --harm-color: #b0762f;  /* the harmony line */
+    --text: #2c2a24;
+    --muted: #69604f;
+    /* Paper is bright, so accent colours that carry text are darker than the
+       same colours used as fills. */
+    --accent-ink: #3d6f57;
+    --harm-ink: #8a5a1c;
+    --border: #d9d0bd;
+    /* Fills are mid-dark, so anything sitting on one needs light text. */
+    --on-fill: #fbfaf4;
+    --danger: #a8443c;
+    --accent-grad: linear-gradient(135deg, #5b8f6f, #3f7256);
+    --base-grad: linear-gradient(135deg, #4a8c6a, #2f6b4e);
+    --harm-grad: linear-gradient(135deg, #c08a3c, #94682a);
   }
   html, body { height: 100%; }
   body {
-    background: radial-gradient(1200px 800px at 50% -10%, #2a2153 0%, var(--bg) 60%);
+    background: radial-gradient(1200px 800px at 50% -10%, #f7f1e3 0%, var(--bg) 60%);
     color: var(--text);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     min-height: 100vh;
@@ -42,20 +53,21 @@
     display: flex; justify-content: center; gap: 8px;
     position: sticky; top: 0; z-index: 10;
     margin: 0 -16px 20px; padding: 16px 16px 10px;
-    background: rgba(16, 12, 31, 0.92);
+    background: rgba(236, 229, 214, 0.92);
     -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
   }
   .tab {
     padding: 7px 16px; border-radius: 999px; font-size: 13px; font-weight: 600;
     border: 1px solid var(--border); color: var(--muted); background: var(--card);
   }
-  .tab.active { background: linear-gradient(135deg, var(--accent), #7c6bd6); color: #14102a; border-color: transparent; }
+  .tab.active { background: var(--accent-grad); color: var(--on-fill); border-color: transparent; }
   .tab.soon { opacity: 0.45; }
   .tab.soon::after { content: " · soon"; font-weight: 400; font-size: 10px; }
 
   .card {
     background: var(--card);
     border: 1px solid var(--border);
+    box-shadow: 0 1px 2px rgba(80, 68, 45, 0.05);
     border-radius: 16px;
     padding: 16px;
     margin-bottom: 16px;
@@ -80,33 +92,33 @@
   #piano {
     position: relative;
     margin: 0 auto;
-    background: #05030c;
+    background: #4a4237;
     border-radius: 0 0 10px 10px;
-    border: 1px solid #000;
+    border: 1px solid #3a332a;
   }
   .key { position: absolute; top: 0; box-sizing: border-box; border-radius: 0 0 5px 5px; transition: background 0.08s; }
   .key.white {
-    background: linear-gradient(#fdfdfd, #e9e9ee);
-    border: 1px solid #17122c;
+    background: linear-gradient(#fffdf7, #efe9db);
+    border: 1px solid #b9ae97;
     border-top: none;
     z-index: 1;
   }
   .key.white .key-label {
     position: absolute; bottom: 6px; left: 50%; transform: translateX(-50%);
-    font-size: 9px; color: #8a8a99; font-weight: 700; pointer-events: none;
+    font-size: 9px; color: #a3987f; font-weight: 700; pointer-events: none;
   }
   .key.black {
-    background: linear-gradient(#2b2740, #0b081a);
-    border: 1px solid #000;
+    background: linear-gradient(#5b5348, #322d25);
+    border: 1px solid #2a251e;
     z-index: 2;
     border-radius: 0 0 4px 4px;
   }
-  .key.white.active-base { background: linear-gradient(#6ee7ad, var(--base-color)); }
-  .key.white.active-harmony { background: linear-gradient(#fdd987, var(--harm-color)); }
+  .key.white.active-base { background: linear-gradient(#84c4a3, var(--base-color)); }
+  .key.white.active-harmony { background: linear-gradient(#e3bc7e, var(--harm-color)); }
   .key.white.active-base.active-harmony { background: linear-gradient(90deg, var(--base-color) 50%, var(--harm-color) 50%); }
-  .key.black.active-base { background: linear-gradient(#3fd68f, #189a5c); }
-  .key.black.active-harmony { background: linear-gradient(#f7c85a, #c48a12); }
-  .key.black.active-base.active-harmony { background: linear-gradient(90deg, #189a5c 50%, #c48a12 50%); }
+  .key.black.active-base { background: linear-gradient(#57a37f, #2b6046); }
+  .key.black.active-harmony { background: linear-gradient(#c5943f, #82591f); }
+  .key.black.active-base.active-harmony { background: linear-gradient(90deg, #2b6046 50%, #82591f 50%); }
 
   /* Now playing */
   .nowplaying { display: flex; gap: 24px; justify-content: center; flex-wrap: wrap; }
@@ -135,10 +147,10 @@
   }
   .note-btn:active { filter: brightness(1.1); }
   .note-btn.active {
-    background: linear-gradient(135deg, var(--base-color), #1fa971);
+    background: var(--base-grad);
     border-color: transparent;
-    color: #06210f;
-    box-shadow: 0 0 0 2px rgba(52,211,153,0.35);
+    color: var(--on-fill);
+    box-shadow: 0 0 0 2px rgba(63,127,95,0.28);
   }
 
   /* Harmony panel: one column per direction, one row per interval */
@@ -164,23 +176,26 @@
     touch-action: none;
   }
   .harm-btn.active {
-    background: linear-gradient(135deg, var(--harm-color), #d69a12);
+    background: var(--harm-grad);
     border-color: transparent;
-    color: #2a1a00;
-    box-shadow: 0 0 0 2px rgba(251,191,36,0.35);
+    color: var(--on-fill);
+    box-shadow: 0 0 0 2px rgba(176,118,47,0.28);
   }
   .hint { font-size: 12px; color: var(--muted); margin-top: 10px; text-align: center; }
-  .credit { font-size: 10px; color: var(--muted); opacity: 0.6; text-align: center; margin-top: 18px; }
+  .credit { font-size: 10px; color: var(--muted); opacity: 0.8; text-align: center; margin-top: 18px; }
 
   /* Practice: toggle grids (keys / intervals) */
   .toggle-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
   .toggle-grid.intervals { grid-template-columns: repeat(2, 1fr); }
   .toggle-grid.notes { grid-template-columns: repeat(4, 1fr); }
+  .toggle-grid.notes .toggle-btn.active {
+    background: #dcead9; color: #2f6b4e; border-color: #9dc0aa;
+  }
   .pool-all {
     float: right; font: inherit; font-size: 11px; text-transform: none; letter-spacing: 0;
-    background: none; border: 0; color: var(--accent); cursor: pointer; padding: 0;
+    background: none; border: 0; color: var(--accent-ink); cursor: pointer; padding: 0;
   }
-  .setup-error { color: #ff9a9a; font-size: 13px; font-weight: 700; text-align: center; margin-top: 10px; }
+  .setup-error { color: var(--danger); font-size: 13px; font-weight: 700; text-align: center; margin-top: 10px; }
   .mode-switch { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .mode-btn {
     display: flex; flex-direction: column; gap: 4px; padding: 12px 10px;
@@ -189,8 +204,8 @@
   }
   .mode-btn span { font-size: 10.5px; font-weight: 600; line-height: 1.35; opacity: 0.85; }
   .mode-btn.active {
-    background: linear-gradient(135deg, var(--accent), #7c6bd6);
-    border-color: transparent; color: #14102a;
+    background: var(--accent-grad);
+    border-color: transparent; color: var(--on-fill);
   }
   .toggle-btn {
     padding: 12px 4px;
@@ -202,9 +217,9 @@
     font-weight: 700;
   }
   .toggle-btn.active {
-    background: linear-gradient(135deg, var(--accent), #7c6bd6);
+    background: var(--accent-grad);
     border-color: transparent;
-    color: #14102a;
+    color: var(--on-fill);
   }
 
   /* Practice: round + mic controls */
@@ -220,8 +235,8 @@
   }
   .big-btn:active { filter: brightness(1.12); }
   .big-btn.start-btn {
-    background: linear-gradient(135deg, var(--accent), #7c6bd6);
-    color: #14102a; border-color: transparent;
+    background: var(--accent-grad);
+    color: var(--on-fill); border-color: transparent;
   }
   .back-link {
     display: block; background: none; border: none; color: var(--muted);
@@ -231,7 +246,7 @@
   .prompt { text-align: center; font-size: 16px; font-weight: 700; min-height: 22px; }
   .round-key {
     text-align: center; font-size: 11px; text-transform: uppercase; letter-spacing: 1px;
-    color: var(--accent); min-height: 14px; margin-top: 2px;
+    color: var(--accent-ink); min-height: 14px; margin-top: 2px;
   }
 
   /* Practice run screen: base note on the left, a live vertical waveform on the
@@ -246,7 +261,7 @@
   .wave-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; }
   #waveCanvas {
     display: block; width: 100%; max-width: 130px; height: 180px;
-    background: #05030c; border: 1px solid var(--border); border-radius: 10px;
+    background: #f4efe2; border: 1px solid #cabfa8; border-radius: 10px;
   }
   .detected-note {
     font-size: 19px; font-weight: 800; font-variant-numeric: tabular-nums;
@@ -255,14 +270,14 @@
   .mic-status { font-size: 11px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
   .feedback { text-align: center; font-size: 15px; font-weight: 800; min-height: 20px; margin-top: 6px; }
   .feedback.correct { color: var(--base-color); }
-  .feedback.nudge { color: var(--harm-color); font-weight: 700; font-size: 13.5px; }
-  .mic-error { text-align: center; font-size: 12px; color: #ff9a9a; margin-top: 10px; }
+  .feedback.nudge { color: var(--harm-ink); font-weight: 700; font-size: 13.5px; }
+  .mic-error { text-align: center; font-size: 12px; color: var(--danger); margin-top: 10px; }
   .streak { text-align: center; font-size: 13px; color: var(--muted); margin-top: 8px; }
 
   /* Play: sing a melody, transcribe it, harmonize it */
   .rec-btn.recording {
-    background: linear-gradient(135deg, #ff5964, #b6293a);
-    color: #fff2f2; border-color: transparent;
+    background: linear-gradient(135deg, #c2564f, #973934);
+    color: #fdf3f1; border-color: transparent;
   }
   .rec-meta {
     display: flex; justify-content: space-between; align-items: baseline;
@@ -273,7 +288,7 @@
     font-variant-numeric: tabular-nums;
   }
   .key-badge {
-    float: right; font-size: 11px; font-weight: 700; color: var(--accent);
+    float: right; font-size: 11px; font-weight: 700; color: var(--accent-ink);
     background: var(--card2); border: 1px solid var(--border);
     border-radius: 999px; padding: 2px 10px;
   }
@@ -290,7 +305,7 @@
   }
   .lyrics-input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
   .editor-lyric { margin-bottom: 8px; }
-  .lyric-hint { font-size: 11px; color: var(--harm-color); margin: 6px 0 10px; min-height: 14px; }
+  .lyric-hint { font-size: 11px; color: var(--harm-ink); margin: 6px 0 10px; min-height: 14px; }
   .scale-btn { margin: 8px auto 2px; display: block; }
   .note-chips { display: flex; flex-wrap: wrap; gap: 6px; }
   .chip-lyric {
@@ -298,9 +313,9 @@
     max-width: 62px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     min-height: 13px;
   }
-  .note-chip.active .chip-lyric, .note-chip.active-harm .chip-lyric { color: #06210f; }
+  .note-chip.active .chip-lyric, .note-chip.active-harm .chip-lyric { color: var(--on-fill); }
   .chip-interval { font-size: 9px; font-weight: 700; color: var(--muted); min-height: 12px; }
-  .note-chip.active .chip-interval, .note-chip.active-harm .chip-interval { color: #2a1a00; }
+  .note-chip.active .chip-interval, .note-chip.active-harm .chip-interval { color: var(--on-fill); }
   .note-chip {
     display: flex; flex-direction: column; align-items: center; gap: 1px;
     min-width: 58px; padding: 7px 8px;
@@ -308,17 +323,17 @@
     font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
     transition: background 0.1s, color 0.1s, border-color 0.1s;
   }
-  .note-chip .chip-harm { font-size: 10px; font-weight: 700; color: var(--harm-color); min-height: 13px; }
+  .note-chip .chip-harm { font-size: 10px; font-weight: 700; color: var(--harm-ink); min-height: 13px; }
   .note-chip.active {
-    background: linear-gradient(135deg, var(--base-color), #1fa971);
-    border-color: transparent; color: #06210f;
+    background: var(--base-grad);
+    border-color: transparent; color: var(--on-fill);
   }
-  .note-chip.active .chip-harm { color: #2a1a00; }
+  .note-chip.active .chip-harm { color: var(--on-fill); }
   .note-chip.active-harm {
-    background: linear-gradient(135deg, var(--harm-color), #d69a12);
-    border-color: transparent; color: #2a1a00;
+    background: var(--harm-grad);
+    border-color: transparent; color: var(--on-fill);
   }
-  .note-chip.active-harm .chip-harm { color: #2a1a00; }
+  .note-chip.active-harm .chip-harm { color: var(--on-fill); }
   .progression {
     font-size: 11.5px; color: var(--accent2); margin-bottom: 10px;
     font-weight: 600; letter-spacing: 0.2px;
@@ -326,7 +341,7 @@
   .note-chip { cursor: pointer; }
   .note-chip.selected {
     border-color: var(--accent);
-    box-shadow: 0 0 0 2px rgba(184,146,255,0.35);
+    box-shadow: 0 0 0 2px rgba(91,143,111,0.3);
   }
   .note-editor {
     margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border);
@@ -346,10 +361,10 @@
     min-width: 46px; justify-content: center;
   }
   .add-chip:hover { color: var(--text); border-color: var(--accent); }
-  .harmony-chip { color: var(--harm-color); }
+  .harmony-chip { color: var(--harm-ink); }
   .harmony-chip .chip-note { font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums; }
   .harmony-chip .chip-interval { color: var(--muted); }
-  .harmony-chip.active-harm .chip-interval { color: #2a1a00; }
+  .harmony-chip.active-harm .chip-interval { color: var(--on-fill); }
   .editor-label { font-size: 12px; color: var(--muted); margin-bottom: 8px; }
   .editor-label strong { color: var(--text); font-size: 14px; }
   .editor-buttons { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -359,7 +374,7 @@
     color: var(--text); font-size: 12.5px; font-weight: 700;
   }
   .edit-btn:active { filter: brightness(1.15); }
-  .edit-btn.danger { color: #ff9a9a; }
+  .edit-btn.danger { color: var(--danger); }
   .play-buttons { display: flex; flex-direction: column; gap: 8px; margin-top: 14px; }
   .editor-length { margin-top: 12px; }
   .song-lines { display: flex; flex-direction: column; gap: 8px; margin-bottom: 14px; }
@@ -367,24 +382,24 @@
     display: flex; align-items: center; gap: 10px; padding: 10px 12px;
     border-radius: 10px; border: 1px solid var(--border); background: var(--card2);
   }
-  .song-line.editing { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(184,146,255,0.3); }
-  .song-line.playing { background: linear-gradient(135deg, var(--base-color), #1fa971); color: #06210f; }
+  .song-line.editing { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(91,143,111,0.3); }
+  .song-line.playing { background: var(--base-grad); color: var(--on-fill); }
   .song-line .line-name { font-size: 13px; font-weight: 800; }
   .song-line .line-meta { flex: 1; font-size: 11px; color: var(--muted); }
-  .song-line.playing .line-meta { color: #06210f; }
+  .song-line.playing .line-meta { color: var(--on-fill); }
   .song-line .line-btn {
     background: none; border: none; color: var(--muted); font-size: 13px; font-weight: 700; padding: 2px 6px;
   }
-  .song-line .line-btn.danger { color: #ff9a9a; }
-  .song-line.playing .line-btn { color: #06210f; }
+  .song-line .line-btn.danger { color: var(--danger); }
+  .song-line.playing .line-btn { color: var(--on-fill); }
 
   .file-warning {
-    background: #3a1414; border: 1px solid #7a2b2b; color: #ffd7d7;
+    background: #f6e3d6; border: 1px solid #d9b295; color: #7d4223;
     border-radius: 12px; padding: 12px 14px; font-size: 12.5px; line-height: 1.5;
     margin-bottom: 16px;
   }
   .file-warning code {
-    background: #24080b; padding: 1px 5px; border-radius: 4px; font-size: 12px;
+    background: #ecd4c0; padding: 1px 5px; border-radius: 4px; font-size: 12px;
   }
 </style>
 </head>
@@ -1644,8 +1659,8 @@
   // color tracks how close you are to the target pitch.
   const waveCanvas = document.getElementById('waveCanvas');
   const waveCtx = waveCanvas.getContext('2d');
-  const WAVE_BG = '#05030c';
-  const WAVE_COLORS = { quiet: '#453d6e', far: '#b892ff', close: '#34d399' };
+  const WAVE_BG = '#f4efe2';
+  const WAVE_COLORS = { quiet: '#b2a68c', far: '#b0762f', close: '#3f7f5f' };
   function clearWave() {
     waveCtx.fillStyle = WAVE_BG;
     waveCtx.fillRect(0, 0, waveCanvas.width, waveCanvas.height);
