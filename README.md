@@ -12,6 +12,8 @@ A web app for learning to hear and sing harmony intervals.
   actually singing in real time (note name + cents off) and tells you when
   you've matched the target. Filter which keys and which intervals are in
   the random pool.
+- **Songs** — a browsable list of real songs; tap one and its melody plays on
+  the piano. Reads `songs.json`, which you generate yourself (see Tools).
 - **Quiz** — coming soon.
 
 ## Running it
@@ -33,6 +35,18 @@ Notes are real recorded piano samples (not synthesized), pitch-shifted onto
 whichever note is pressed. See `samples/piano/CREDITS.md` for licensing.
 
 ## Tools
+
+`tools/hooktheory_to_songs.py` builds the Songs tab's `songs.json` from the
+[lead-sheet-dataset](https://github.com/wayne391/lead-sheet-dataset) export of
+Hooktheory/TheoryTab lead sheets, where each song section already carries a
+labelled monophonic melody:
+
+```
+python3 tools/hooktheory_to_songs.py path/to/datasets/event -o songs.json
+```
+
+`songs.json` is gitignored — the transcriptions are third-party and licensed for
+academic use, so generate your own rather than committing one.
 
 `tools/melody_to_piano.py` renders the melody line out of a
 [POP909](https://github.com/music-x-lab/POP909-Dataset) song folder using the

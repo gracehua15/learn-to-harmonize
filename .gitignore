@@ -1,2 +1,5 @@
 .DS_Store
 node_modules/
+
+# Generated from third-party lead sheets — see tools/hooktheory_to_songs.py
+songs.json
