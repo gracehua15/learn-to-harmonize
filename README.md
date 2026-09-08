@@ -13,8 +13,16 @@ A web app for learning to hear and sing harmony intervals.
   intervals it asks for. *Scale Harmonization* asks for a scale degree, so
   whether the answer is major or minor depends on the key — you choose the key,
   the scale, and whether notes arrive at random or walk up the scale on repeat.
-- **Play** — sing a melody, watch it transcribed to piano notes with the words
-  you sang, fix any note it misheard, and hear the harmony it writes for you.
+- **Play** — build a melody two ways: *record singing*, which transcribes what
+  you sang into piano notes with the words alongside them, or *play piano*,
+  tapping the notes in exactly. Either way you can fix any note, hear the
+  harmony it writes for you, and save the result to the shared library under a
+  song, artist, and which part of the song it is. Anyone can add to the library
+  and open anyone else's melody to edit.
+
+  Note lengths come off one ladder of standard values — sixteenth through whole
+  at 120 bpm — so Shorter and Longer land on lengths you can reason about rather
+  than scaling each note by a percentage into its own odd number.
 - **Quiz** — coming soon.
 
 ## Practice tracking
@@ -49,8 +57,9 @@ npm install
 DATABASE_URL=postgresql://... npm start
 ```
 
-It creates its own tables on boot. Without `DATABASE_URL` it still serves the
-page and reports tracking as unavailable, rather than failing.
+It creates its own tables on boot (`users`, `attempts`, `melodies`). Without
+`DATABASE_URL` it still serves the page and reports tracking as unavailable,
+rather than failing — practice runs untracked and the library hides itself.
 
 (Sample playback and the practice mic both load resources via `fetch`, which
 browsers block from a bare `file://` URL — serve it over HTTP, even locally.)

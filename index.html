@@ -310,6 +310,42 @@
   .day-row .day-count strong { color: var(--text); }
   .day-empty { font-size: 12px; color: var(--muted); }
 
+  /* Play: tapping in a melody on a keyboard */
+  .entry-keys { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-bottom: 10px; }
+  .entry-key {
+    padding: 14px 0; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--card2); color: var(--text);
+    font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
+  }
+  .entry-key.sharp { background: var(--card); color: var(--muted); }
+  .entry-key:active, .entry-key.hit { background: var(--base-grad); color: var(--on-fill); border-color: transparent; }
+  .entry-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+  .entry-actions .edit-btn { flex: 1 1 auto; }
+
+  /* Play: the shared library */
+  .save-grid { display: grid; gap: 8px; margin-bottom: 12px; }
+  .save-part {
+    background: var(--card2); color: var(--text); border: 1px solid var(--border);
+    border-radius: 10px; padding: 9px 11px; font-size: 14px; font-weight: 600; font-family: inherit;
+  }
+  .library-list { display: flex; flex-direction: column; gap: 8px; }
+  .library-row {
+    display: flex; align-items: center; gap: 10px; padding: 10px 12px;
+    border-radius: 10px; border: 1px solid var(--border); background: var(--card2);
+  }
+  .library-main { flex: 1; min-width: 0; }
+  .library-title {
+    font-size: 13px; font-weight: 800;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .library-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .library-part {
+    font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.5px;
+    color: var(--accent-ink); background: var(--card); border: 1px solid var(--border);
+    border-radius: 999px; padding: 2px 8px; flex: 0 0 auto;
+  }
+  .library-row .line-btn { flex: 0 0 auto; color: var(--accent-ink); font-weight: 700; }
+
   /* Play: sing a melody, transcribe it, harmonize it */
   .rec-btn.recording {
     background: linear-gradient(135deg, #c2564f, #973934);
@@ -649,7 +685,18 @@
 
   <div id="playView" hidden>
     <div class="card">
-      <div class="grid-title">Sing a melody — it gets written out as piano notes, played back, and harmonized</div>
+      <div class="grid-title">Make a melody — it gets written out as piano notes, played back, and harmonized</div>
+      <div class="mode-switch" id="sourceSwitch">
+        <button class="mode-btn active" data-source="voice">
+          🎤 Record singing<span>Sing it and let the app work out the notes</span>
+        </button>
+        <button class="mode-btn" data-source="piano">
+          🎹 Play piano<span>Tap the keys — every note lands exactly where you put it</span>
+        </button>
+      </div>
+    </div>
+
+    <div class="card" id="voiceSourceCard">
       <button class="big-btn rec-btn" id="recordBtn">● Record</button>
       <div class="rec-meta">
         <span id="recStatus">Ready when you are</span>
@@ -658,9 +705,33 @@
       <div class="mic-error" id="recError" hidden></div>
     </div>
 
+    <div class="card" id="pianoSourceCard" hidden>
+      <div class="controls">
+        <div class="field">
+          <label for="entryLengthSelect">Note length</label>
+          <select id="entryLengthSelect"></select>
+        </div>
+        <div class="field">
+          <label for="entryOctaveSelect">Octave</label>
+          <select id="entryOctaveSelect">
+            <option value="3">C3 – B4</option>
+            <option value="4" selected>C4 – B5</option>
+            <option value="5">C5 – B6</option>
+          </select>
+        </div>
+      </div>
+      <div class="entry-keys" id="entryKeys"></div>
+      <div class="entry-actions">
+        <button class="edit-btn" id="entryRestBtn">＋ Rest</button>
+        <button class="edit-btn" id="entryUndoBtn">⌫ Undo note</button>
+        <button class="edit-btn danger" id="entryClearBtn">✕ Clear</button>
+      </div>
+      <div class="rec-meta"><span id="entryStatus">Tap keys to build a melody</span></div>
+    </div>
+
     <div class="card" id="transcriptCard" hidden>
       <div class="grid-title">
-        Melody — what you sang
+        <span id="transcriptTitle">Melody — what you sang</span>
         <span class="key-badge" id="detectedKey"></span>
       </div>
       <div class="progression" id="progression"></div>
@@ -695,8 +766,8 @@
           </div>
           <div class="editor-label editor-length">Length <strong id="editorLength">—</strong></div>
           <div class="editor-buttons">
-            <button class="edit-btn" data-scale="0.75">◀ Shorter</button>
-            <button class="edit-btn" data-scale="1.3333">Longer ▶</button>
+            <button class="edit-btn" data-step="-1">◀ Shorter</button>
+            <button class="edit-btn" data-step="1">Longer ▶</button>
           </div>
         </div>
       </details>
@@ -737,7 +808,38 @@
 
     <div class="card" id="playbackCard" hidden>
       <button class="big-btn start-btn" id="playBothBtn">▶ Play together</button>
-      <button class="back-link" id="clearTakeBtn">↺ Record a new take</button>
+      <button class="back-link" id="clearTakeBtn">↺ Start a new melody</button>
+    </div>
+
+    <div class="card" id="saveCard" hidden>
+      <div class="grid-title">Save to the library</div>
+      <div class="save-grid">
+        <input type="text" id="saveSong" class="lyrics-input" maxlength="80"
+               placeholder="Song name" autocomplete="off">
+        <input type="text" id="saveArtist" class="lyrics-input" maxlength="80"
+               placeholder="Artist" autocomplete="off">
+        <select id="savePart" class="save-part">
+          <option value="">Which part?</option>
+          <option value="intro">Intro</option>
+          <option value="verse">Verse</option>
+          <option value="pre-chorus">Pre-chorus</option>
+          <option value="chorus">Chorus</option>
+          <option value="bridge">Bridge</option>
+          <option value="hook">Hook</option>
+          <option value="outro">Outro</option>
+          <option value="other">Other</option>
+        </select>
+      </div>
+      <button class="big-btn" id="saveMelodyBtn">♪ Save melody</button>
+      <div class="signin-note" id="saveNote"></div>
+    </div>
+
+    <div class="card" id="libraryCard" hidden>
+      <div class="grid-title">
+        Melody library
+        <button class="pool-all" id="libraryRefreshBtn">refresh</button>
+      </div>
+      <div class="library-list" id="libraryList"></div>
     </div>
 
     <div class="card" id="songCard" hidden>
@@ -1522,6 +1624,7 @@
     }
     document.getElementById('userCard').hidden = !trackingAvailable;
     if (!trackingAvailable) return;
+    loadLibrary();
     practiceUser = loadStoredUser();
     renderUserBox();
     if (practiceUser) refreshStats();
@@ -2167,6 +2270,51 @@
   let songLines = [];                   // each: {notes, lyrics, key, chords, harmony, style}
   let editingLineIndex = null;          // which line the take on screen belongs to, if any
   const SONG_LINE_GAP_SEC = 0.45;       // breath between lines when playing the whole song
+  // Note lengths come off one ladder rather than being scaled by a percentage.
+  // Multiplying each note by 0.75 or 1.33 left every note on its own arbitrary
+  // value, so two notes that should be the same length never quite were — and a
+  // melody saved to the library has to be readable by someone else.
+  // One beat is 500 ms (120 bpm) and the rungs are the usual note values.
+  const BEAT_MS = 500;
+  const NOTE_LENGTHS = [
+    { ms: BEAT_MS / 4,     label: '1/16' },
+    { ms: BEAT_MS / 2,     label: '1/8' },
+    { ms: BEAT_MS * 0.75,  label: 'dotted 1/8' },
+    { ms: BEAT_MS,         label: '1/4' },
+    { ms: BEAT_MS * 1.5,   label: 'dotted 1/4' },
+    { ms: BEAT_MS * 2,     label: '1/2' },
+    { ms: BEAT_MS * 3,     label: 'dotted 1/2' },
+    { ms: BEAT_MS * 4,     label: 'whole' },
+  ];
+  const DEFAULT_LENGTH_MS = BEAT_MS;
+
+  function nearestLengthIndex(ms) {
+    let best = 0, bestGap = Infinity;
+    NOTE_LENGTHS.forEach((l, i) => {
+      const gap = Math.abs(l.ms - ms);
+      if (gap < bestGap) { bestGap = gap; best = i; }
+    });
+    return best;
+  }
+  // A note that isn't on the ladder yet snaps onto it first, so the first press
+  // lands on a standard length rather than a standard step away from an odd one.
+  function steppedLength(ms, direction) {
+    const i = nearestLengthIndex(ms);
+    const snapped = NOTE_LENGTHS[i].ms;
+    if (Math.abs(snapped - ms) >= 1) {
+      // Snapping is itself the change, as long as it went the way you asked.
+      if (direction > 0 && snapped > ms) return snapped;
+      if (direction < 0 && snapped < ms) return snapped;
+    }
+    const next = Math.max(0, Math.min(NOTE_LENGTHS.length - 1, i + direction));
+    return NOTE_LENGTHS[next].ms;
+  }
+  function lengthLabel(ms) {
+    const i = nearestLengthIndex(ms);
+    const exact = Math.abs(NOTE_LENGTHS[i].ms - ms) < 1;
+    return `${(ms / 1000).toFixed(2)}s${exact ? ` · ${NOTE_LENGTHS[i].label}` : ''}`;
+  }
+
   const MIN_EDIT_NOTE_MS = 90, MAX_EDIT_NOTE_MS = 4000;
   const NOTE_GAP_MS = 60;               // one fixed pause between notes, whatever was sung
 
@@ -2434,9 +2582,19 @@
   // Recorded start times keep every breath, hesitation and consonant gap exactly
   // as sung, which plays back ragged. Lay the notes out end to end with one
   // constant pause instead, so the only timing you control is note length.
+  // Every card that only makes sense once there is a melody, shown or hidden
+  // together. Saving is also gated on the library being reachable at all.
+  function showTakeCards(has) {
+    ['transcriptCard', 'harmonyCard', 'playbackCard'].forEach((id) => {
+      document.getElementById(id).hidden = !has;
+    });
+    document.getElementById('saveCard').hidden = !(has && trackingAvailable);
+  }
+
   function relayoutTake() {
     let cursor = 0;
     takeNotes.forEach((n) => {
+      cursor += n.restMs || 0;          // silence tapped in before this note
       n.startMs = cursor;
       cursor += n.durMs + NOTE_GAP_MS;
     });
@@ -2792,7 +2950,7 @@
     const note = has ? takeNotes[selectedNoteIndex] : null;
     document.getElementById('editorNoteName').textContent = has ? noteName(note.midi) : '—';
     document.getElementById('editorLyric').value = has ? (takeLyrics[selectedNoteIndex] || '') : '';
-    document.getElementById('editorLength').textContent = has ? (note.durMs / 1000).toFixed(2) + 's' : '—';
+    document.getElementById('editorLength').textContent = has ? lengthLabel(note.durMs) : '—';
     const h = has ? takeHarmony[selectedNoteIndex] : null;
     document.getElementById('editorHarmony').textContent = h != null
       ? `${noteName(h)} (${intervalTag(note.midi, h)})`
@@ -2843,10 +3001,10 @@
   // Stretch or squeeze one note. Everything after it shifts by the same amount,
   // so the rests you actually sang are preserved instead of the next note being
   // swallowed or a hole opening up.
-  function adjustSelectedLength(factor) {
+  function adjustSelectedLength(direction) {
     if (selectedNoteIndex == null) return;
     const note = takeNotes[selectedNoteIndex];
-    const next = Math.max(MIN_EDIT_NOTE_MS, Math.min(MAX_EDIT_NOTE_MS, Math.round(note.durMs * factor)));
+    const next = Math.max(MIN_EDIT_NOTE_MS, Math.min(MAX_EDIT_NOTE_MS, steppedLength(note.durMs, direction)));
     note.durMs = next;
     relayoutTake();                     // gaps stay constant; everything after just shifts
     renderTake();
@@ -2908,9 +3066,7 @@
     syncLyricsInput();
     selectedNoteIndex = null;
     if (!takeNotes.length) {
-      document.getElementById('transcriptCard').hidden = true;
-      document.getElementById('harmonyCard').hidden = true;
-      document.getElementById('playbackCard').hidden = true;
+      showTakeCards(false);
       setRecStatus('Ready when you are');
       return;
     }
@@ -2929,9 +3085,7 @@
     selectedNoteIndex = null;
     stopTakePlayback();
     if (!takeNotes.length) {
-      document.getElementById('transcriptCard').hidden = true;
-      document.getElementById('harmonyCard').hidden = true;
-      document.getElementById('playbackCard').hidden = true;
+      showTakeCards(false);
       setRecStatus("Didn't catch any notes — try singing a bit louder or longer");
       return;
     }
@@ -2954,9 +3108,7 @@
     setLyricsFromText(speechWords.join(' '));
     syncLyricsInput();
     const hasNotes = takeNotes.length > 0;
-    document.getElementById('transcriptCard').hidden = !hasNotes;
-    document.getElementById('harmonyCard').hidden = !hasNotes;
-    document.getElementById('playbackCard').hidden = !hasNotes;
+    showTakeCards(hasNotes);
     if (!hasNotes) {
       setRecStatus("Didn't catch any notes — try singing a bit louder or longer");
       return;
@@ -3033,7 +3185,7 @@
   // ---- play: a song is a list of lines, each analysed on its own ----
   function captureTake() {
     return {
-      notes: takeNotes.map((n) => ({ midi: n.midi, startMs: n.startMs, durMs: n.durMs })),
+      notes: takeNotes.map((n) => ({ midi: n.midi, startMs: n.startMs, durMs: n.durMs, restMs: n.restMs || 0 })),
       lyrics: takeLyrics.slice(),
       key: takeKey ? { root: takeKey.root, type: takeKey.type } : null,
       chords: takeChords.slice(),
@@ -3044,7 +3196,7 @@
   }
 
   function applyTake(line) {
-    takeNotes = line.notes.map((n) => ({ midi: n.midi, startMs: n.startMs, durMs: n.durMs }));
+    takeNotes = line.notes.map((n) => ({ midi: n.midi, startMs: n.startMs, durMs: n.durMs, restMs: n.restMs || 0 }));
     takeLyrics = line.lyrics.slice();
     takeKey = line.key ? { root: line.key.root, type: line.key.type } : null;
     takeChords = line.chords.slice();
@@ -3053,9 +3205,7 @@
     harmonyCustom = !!line.custom;
     selectedNoteIndex = null;
     syncLyricsInput();
-    document.getElementById('transcriptCard').hidden = false;
-    document.getElementById('harmonyCard').hidden = false;
-    document.getElementById('playbackCard').hidden = false;
+    showTakeCards(true);
     renderTake();
   }
 
@@ -3172,6 +3322,197 @@
     });
   }
 
+  // ---- play: tapping a melody in on a keyboard ----
+  // Singing is guesswork the app has to undo; tapping is exact. Same take, same
+  // editor, same harmony — only the way the notes arrive differs.
+  let melodySource = 'voice';
+  let entryOctave = 4;
+  let entryLengthMs = DEFAULT_LENGTH_MS;
+  let pendingRestMs = 0;
+
+  function setMelodySource(source) {
+    melodySource = source;
+    document.querySelectorAll('#sourceSwitch .mode-btn').forEach((b) => {
+      b.classList.toggle('active', b.dataset.source === source);
+    });
+    document.getElementById('voiceSourceCard').hidden = source !== 'voice';
+    document.getElementById('pianoSourceCard').hidden = source !== 'piano';
+    // Re-splitting rebuilds the take from the recording, so it has nothing to
+    // say about notes that were tapped in.
+    document.querySelector('#transcriptCard .detect-row').hidden = source !== 'voice';
+    document.getElementById('transcriptTitle').textContent =
+      source === 'piano' ? 'Melody — what you played' : 'Melody — what you sang';
+    if (source === 'piano' && recording) stopRecording();
+    stopTakePlayback();
+  }
+
+  function renderEntryKeys() {
+    const grid = document.getElementById('entryKeys');
+    grid.innerHTML = '';
+    // Two octaves is enough to write a phrase without scrolling, and the octave
+    // picker moves the window when it isn't.
+    for (let i = 0; i < 24; i++) {
+      const midi = 12 * (entryOctave + 1) + i;
+      const btn = document.createElement('button');
+      const name = noteName(midi);
+      btn.className = 'entry-key' + (name.includes('♯') ? ' sharp' : '');
+      btn.dataset.midi = midi;
+      btn.textContent = name;
+      btn.addEventListener('click', () => addEntryNote(midi, btn));
+      grid.appendChild(btn);
+    }
+  }
+
+  function setEntryStatus() {
+    const n = takeNotes.length;
+    document.getElementById('entryStatus').textContent = n
+      ? `${n} note${n === 1 ? '' : 's'}${pendingRestMs ? ' · rest queued' : ''} — tap more, or edit below`
+      : 'Tap keys to build a melody';
+  }
+
+  function afterEntryChange() {
+    relayoutTake();
+    syncLyricsInput();
+    if (takeNotes.length) {
+      analyzeTake();
+      showTakeCards(true);
+      renderTake();
+    } else {
+      showTakeCards(false);
+    }
+    setEntryStatus();
+    saveCurrentLine();
+  }
+
+  function addEntryNote(midi, btnEl) {
+    ensureAudio();
+    startVoice(midi, 0.26, false, audioCtx.currentTime,
+      audioCtx.currentTime + Math.max(MIN_RING_SEC, entryLengthMs / 1000 + NOTE_TAIL_SEC));
+    takeNotes.push({ midi: midi, startMs: 0, durMs: entryLengthMs, restMs: pendingRestMs });
+    takeLyrics.push('');
+    takeHarmony.push(null);
+    pendingRestMs = 0;
+    selectedNoteIndex = null;
+    if (btnEl) {
+      btnEl.classList.add('hit');
+      setTimeout(() => btnEl.classList.remove('hit'), 120);
+    }
+    afterEntryChange();
+  }
+
+  function undoEntryNote() {
+    if (!takeNotes.length) return;
+    takeNotes.pop();
+    takeLyrics.pop();
+    takeHarmony.pop();
+    selectedNoteIndex = null;
+    afterEntryChange();
+  }
+
+  // ---- play: the shared melody library ----
+  function saveNote(text, isError) {
+    const el = document.getElementById('saveNote');
+    el.textContent = text || '';
+    el.className = 'signin-note' + (isError ? ' error' : '');
+  }
+
+  async function saveMelody() {
+    if (!takeNotes.length) return;
+    const btn = document.getElementById('saveMelodyBtn');
+    btn.disabled = true;
+    saveNote('');
+    try {
+      const take = captureTake();
+      const body = {
+        song: document.getElementById('saveSong').value,
+        artist: document.getElementById('saveArtist').value,
+        part: document.getElementById('savePart').value,
+        source: melodySource,
+        userId: practiceUser ? practiceUser.id : null,
+        addedBy: practiceUser ? practiceUser.username : null,
+        take: { notes: take.notes, lyrics: take.lyrics, harmony: take.harmony,
+                key: take.key, style: take.style },
+      };
+      const { melody } = await api('/api/melodies', { method: 'POST', body: JSON.stringify(body) });
+      saveNote(`Saved “${melody.song}” — ${melody.part}.`, false);
+      document.getElementById('savePart').value = '';
+      await loadLibrary();
+    } catch (e) {
+      saveNote(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function loadLibrary() {
+    if (!trackingAvailable) return;
+    const list = document.getElementById('libraryList');
+    let melodies;
+    try {
+      ({ melodies } = await api('/api/melodies'));
+    } catch (e) {
+      document.getElementById('libraryCard').hidden = true;
+      return;
+    }
+    document.getElementById('libraryCard').hidden = false;
+    if (!melodies.length) {
+      list.innerHTML = '<div class="day-empty">Nothing saved yet — the first melody can be yours.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    melodies.forEach((m) => {
+      const row = document.createElement('div');
+      row.className = 'library-row';
+      row.dataset.id = m.id;
+      const main = document.createElement('div');
+      main.className = 'library-main';
+      const title = document.createElement('div');
+      title.className = 'library-title';
+      title.textContent = `${m.song} — ${m.artist}`;
+      const sub = document.createElement('div');
+      sub.className = 'library-sub';
+      sub.textContent = `${m.noteCount} note${m.noteCount === 1 ? '' : 's'} · ` +
+        `${m.source === 'piano' ? 'played' : 'sung'}${m.addedBy ? ` by ${m.addedBy}` : ''}`;
+      main.appendChild(title);
+      main.appendChild(sub);
+      const part = document.createElement('span');
+      part.className = 'library-part';
+      part.textContent = m.part;
+      const open = document.createElement('button');
+      open.className = 'line-btn';
+      open.textContent = 'open';
+      open.addEventListener('click', () => openMelody(m.id));
+      row.appendChild(main);
+      row.appendChild(part);
+      row.appendChild(open);
+      list.appendChild(row);
+    });
+  }
+
+  async function openMelody(id) {
+    try {
+      const { melody } = await api(`/api/melodies/${id}`);
+      stopTakePlayback();
+      // A saved melody arrives as a take, so it drops straight into the editor
+      // the same way a line of your own song does.
+      applyTake({
+        notes: melody.take.notes, lyrics: melody.take.lyrics || [],
+        key: melody.take.key, chords: [], harmony: melody.take.harmony || [],
+        style: melody.take.style, custom: !!(melody.take.harmony || []).length,
+      });
+      editingLineIndex = null;
+      document.getElementById('saveSong').value = melody.song;
+      document.getElementById('saveArtist').value = melody.artist;
+      document.getElementById('savePart').value = melody.part;
+      saveNote(`Opened “${melody.song}” — edit it and save it again as your own take.`, false);
+      setRecStatus(`${melody.song} — ${melody.part}`);
+      setEntryStatus();
+      document.getElementById('transcriptCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      saveNote(e.message, true);
+    }
+  }
+
   function initPlayControls() {
     document.getElementById('recordBtn').addEventListener('click', () => {
       if (recording) stopRecording();
@@ -3191,14 +3532,47 @@
     });
     document.getElementById('editorInsertBtn').addEventListener('click', () => insertNote(selectedNoteIndex));
     document.getElementById('editorDeleteBtn').addEventListener('click', deleteSelectedNote);
-    document.querySelectorAll('#noteEditor .edit-btn[data-scale]').forEach((btn) => {
-      btn.addEventListener('click', () => adjustSelectedLength(parseFloat(btn.dataset.scale)));
+    document.querySelectorAll('#noteEditor .edit-btn[data-step]').forEach((btn) => {
+      btn.addEventListener('click', () => adjustSelectedLength(parseInt(btn.dataset.step, 10)));
     });
     document.querySelectorAll('#harmonyEditor .edit-btn[data-harm]').forEach((btn) => {
       btn.addEventListener('click', () => adjustSelectedHarmony(parseInt(btn.dataset.harm, 10)));
     });
     document.getElementById('playSongBtn').addEventListener('click', () => playLines(songLines, 'both'));
     document.getElementById('sensitivitySelect').addEventListener('change', resegmentTake);
+
+    document.querySelectorAll('#sourceSwitch .mode-btn').forEach((btn) => {
+      btn.addEventListener('click', () => setMelodySource(btn.dataset.source));
+    });
+    const lenSel = document.getElementById('entryLengthSelect');
+    NOTE_LENGTHS.forEach((l) => {
+      const opt = document.createElement('option');
+      opt.value = String(l.ms);
+      opt.textContent = `${l.label} · ${(l.ms / 1000).toFixed(2)}s`;
+      if (l.ms === DEFAULT_LENGTH_MS) opt.selected = true;
+      lenSel.appendChild(opt);
+    });
+    lenSel.addEventListener('change', () => { entryLengthMs = Number(lenSel.value); });
+    const octSel = document.getElementById('entryOctaveSelect');
+    octSel.value = String(entryOctave);
+    octSel.addEventListener('change', () => {
+      entryOctave = parseInt(octSel.value, 10);
+      renderEntryKeys();
+    });
+    document.getElementById('entryRestBtn').addEventListener('click', () => {
+      pendingRestMs += entryLengthMs;
+      setEntryStatus();
+    });
+    document.getElementById('entryUndoBtn').addEventListener('click', undoEntryNote);
+    document.getElementById('entryClearBtn').addEventListener('click', () => {
+      takeNotes = []; takeLyrics = []; takeHarmony = []; takeChords = []; takeKey = null;
+      pendingRestMs = 0; selectedNoteIndex = null;
+      afterEntryChange();
+    });
+    renderEntryKeys();
+
+    document.getElementById('saveMelodyBtn').addEventListener('click', saveMelody);
+    document.getElementById('libraryRefreshBtn').addEventListener('click', loadLibrary);
     document.getElementById('lyricsInput').addEventListener('input', (e) => {
       setLyricsFromText(e.target.value);
       renderTake();
@@ -3225,9 +3599,7 @@
       renderSongList();
       document.getElementById('lyricsInput').value = '';
       document.getElementById('lyricHint').textContent = '';
-      document.getElementById('transcriptCard').hidden = true;
-      document.getElementById('harmonyCard').hidden = true;
-      document.getElementById('playbackCard').hidden = true;
+      showTakeCards(false);
       setRecStatus('Ready when you are');
     });
   }

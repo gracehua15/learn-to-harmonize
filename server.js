@@ -58,6 +58,25 @@ async function initDb() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS attempts_user_day_idx ON attempts (user_id, day);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS melodies (
+      id         BIGSERIAL PRIMARY KEY,
+      user_id    BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      -- Kept alongside user_id so a melody still says who added it after that
+      -- person's row goes away.
+      added_by   TEXT,
+      song       TEXT NOT NULL,
+      artist     TEXT NOT NULL,
+      part       TEXT NOT NULL,
+      -- The whole take in one document: notes, words, key, chords, harmony.
+      -- It is only ever read back as a unit, and its shape is the client's to
+      -- evolve, so columns per field would buy nothing.
+      take       JSONB NOT NULL,
+      source     TEXT,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS melodies_recent_idx ON melodies (created_at DESC);`);
   dbReady = true;
   console.log('stats tracking ready');
 }
@@ -87,6 +106,10 @@ function readJson(req) {
     req.on('error', reject);
   });
 }
+
+// The parts of a song a melody can belong to. Kept closed so the library can
+// be grouped and filtered rather than accumulating spellings of "chorus".
+const PARTS = ['verse', 'pre-chorus', 'chorus', 'bridge', 'intro', 'outro', 'hook', 'other'];
 
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const isDay = (s) => typeof s === 'string' && DAY_RE.test(s) && !isNaN(Date.parse(s));
@@ -220,6 +243,84 @@ async function handleApi(req, res, url) {
       streak: streakFrom(days, today),
       bestStreak: bestStreakFrom(days),
       totals,
+    });
+  }
+
+  // ---- the shared melody library ----
+  if (url.pathname === '/api/melodies' && req.method === 'POST') {
+    const body = await readJson(req);
+    const text = (v, max) => String(v == null ? '' : v).trim().replace(/\s+/g, ' ').slice(0, max);
+    const song = text(body.song, 80);
+    const artist = text(body.artist, 80);
+    const part = text(body.part, 24).toLowerCase();
+    if (!song) return send(res, 400, { error: 'Give the song a name.' });
+    if (!artist) return send(res, 400, { error: 'Who is it by?' });
+    if (!PARTS.includes(part)) return send(res, 400, { error: 'Pick which part of the song this is.' });
+    const take = body.take;
+    if (!take || !Array.isArray(take.notes) || !take.notes.length) {
+      return send(res, 400, { error: 'Nothing to save yet.' });
+    }
+    if (take.notes.length > 400) return send(res, 400, { error: 'That melody is too long to save.' });
+    // Store only the fields the player reads back, so a stray key in the POST
+    // body can never end up in the library.
+    const clean = {
+      notes: take.notes.slice(0, 400).map((n) => ({
+        midi: Math.round(Number(n.midi)) || 0,
+        startMs: Math.max(0, Math.round(Number(n.startMs)) || 0),
+        durMs: Math.max(1, Math.round(Number(n.durMs)) || 1),
+        restMs: Math.max(0, Math.round(Number(n.restMs)) || 0),
+      })),
+      lyrics: Array.isArray(take.lyrics) ? take.lyrics.slice(0, 400).map((w) => String(w || '').slice(0, 24)) : [],
+      harmony: Array.isArray(take.harmony)
+        ? take.harmony.slice(0, 400).map((h) => (h == null ? null : Math.round(Number(h)) || null))
+        : [],
+      key: take.key && Number.isFinite(Number(take.key.root))
+        ? { root: Number(take.key.root), type: take.key.type === 'minor' ? 'minor' : 'major' }
+        : null,
+      style: take.style ? String(take.style).slice(0, 24) : null,
+    };
+    if (clean.notes.some((n) => n.midi < 12 || n.midi > 108)) {
+      return send(res, 400, { error: 'That melody has notes outside the piano.' });
+    }
+    const userId = Number(body.userId);
+    const row = await pool.query(
+      `INSERT INTO melodies (user_id, added_by, song, artist, part, take, source)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)
+       RETURNING id, song, artist, part, added_by, created_at`,
+      [Number.isInteger(userId) && userId > 0 ? userId : null,
+       text(body.addedBy, 24) || null, song, artist, part, JSON.stringify(clean),
+       body.source === 'piano' ? 'piano' : 'voice']
+    );
+    return send(res, 200, { melody: Object.assign(row.rows[0], { id: Number(row.rows[0].id) }) });
+  }
+
+  if (url.pathname === '/api/melodies' && req.method === 'GET') {
+    const rows = await pool.query(
+      `SELECT id, song, artist, part, added_by, source, created_at,
+              jsonb_array_length(take -> 'notes') AS note_count
+         FROM melodies
+        ORDER BY created_at DESC
+        LIMIT 100`
+    );
+    return send(res, 200, {
+      melodies: rows.rows.map((r) => ({
+        id: Number(r.id), song: r.song, artist: r.artist, part: r.part,
+        addedBy: r.added_by, source: r.source, noteCount: r.note_count,
+      })),
+    });
+  }
+
+  const one = url.pathname.match(/^\/api\/melodies\/(\d+)$/);
+  if (one && req.method === 'GET') {
+    const row = await pool.query(
+      `SELECT id, song, artist, part, added_by, source, take FROM melodies WHERE id = $1`,
+      [Number(one[1])]
+    );
+    if (!row.rows.length) return send(res, 404, { error: 'not found' });
+    const m = row.rows[0];
+    return send(res, 200, {
+      melody: { id: Number(m.id), song: m.song, artist: m.artist, part: m.part,
+                addedBy: m.added_by, source: m.source, take: m.take },
     });
   }
 
