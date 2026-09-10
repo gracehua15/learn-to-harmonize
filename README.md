@@ -27,11 +27,17 @@ where you are.
   Note lengths come off one ladder of standard values — sixteenth through whole
   at 120 bpm — so Shorter and Longer land on lengths you can reason about rather
   than scaling each note by a percentage into its own odd number.
-- **Split a track** — hand it an audio file and it comes back as two: the part
-  you asked for (vocals, piano, guitar, bass or drums) and everything else,
-  both playable in the page and downloadable. Meant for your own recordings
-  and anything you hold the rights to. The door only appears when the server
-  has a splitting key.
+- **Upload** — hand it an audio file and it comes back as two: the part you
+  asked for (vocals, piano, guitar, bass or drums) and everything else, both
+  playable in the page and downloadable. Meant for your own recordings and
+  anything you hold the rights to. The door only appears when the server has a
+  splitting key.
+- **Song Vocals** — splits you chose to keep. The audio lives in the database,
+  because the split service deletes its own copies within a day. Either from
+  here or straight off a fresh split, a stem can be read into Play: the file
+  goes through the same pitch detector, segmenter and harmony the microphone
+  does, so an imported line is an ordinary take you can fix note by note and
+  save. Reading is capped at the first minute of a file.
 - **Melody library** — everything anyone has saved, opened straight into Play
   to edit. The door only appears once there is something behind it.
 
@@ -71,19 +77,21 @@ npm install
 DATABASE_URL=postgresql://... npm start
 ```
 
-It creates its own tables on boot (`users`, `attempts`, `melodies`). Without
-`DATABASE_URL` it still serves the page and reports tracking as unavailable,
-rather than failing — practice runs untracked and the library hides itself.
+It creates its own tables on boot (`users`, `attempts`, `melodies`, `uploads`).
+Without `DATABASE_URL` it still serves the page and reports tracking as
+unavailable, rather than failing — practice runs untracked and the libraries
+hide themselves.
 
 (Sample playback and the practice mic both load resources via `fetch`, which
 browsers block from a bare `file://` URL — serve it over HTTP, even locally.)
 
 Splitting is a separate switch on the same server: set `LALALAI_LICENSE_KEY` to
-a [LALAL.AI](https://www.lalal.ai/api/v1/docs/) license key and the Split door
+a [LALAL.AI](https://www.lalal.ai/api/v1/docs/) license key and the Upload door
 appears. The key stays on the server — the browser uploads to this server,
 which talks to LALAL.AI and streams the finished stems back, so the page never
 holds the key or addresses the split service. Uploads are capped at 30 MB, and
-LALAL.AI bills per minute of audio processed.
+LALAL.AI bills per minute of audio processed. Keeping a split needs
+`DATABASE_URL` as well, and stores up to 25 MB per stem.
 
 ## Deploying
 

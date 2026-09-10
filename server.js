@@ -77,6 +77,24 @@ async function initDb() {
     );
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS melodies_recent_idx ON melodies (created_at DESC);`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS uploads (
+      id         BIGSERIAL PRIMARY KEY,
+      user_id    BIGINT REFERENCES users(id) ON DELETE SET NULL,
+      added_by   TEXT,
+      title      TEXT NOT NULL,
+      -- Which part was pulled out; the other column is everything else.
+      stem       TEXT NOT NULL,
+      -- LALAL.AI drops its copies within a day, so the audio has to live
+      -- somewhere of ours. A stem is a few megabytes and there is no object
+      -- store in this deployment, so it sits beside everything else the app
+      -- owns rather than adding a second service to keep in sync.
+      stem_audio BYTEA NOT NULL,
+      back_audio BYTEA NOT NULL,
+      created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    );
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS uploads_recent_idx ON uploads (created_at DESC);`);
   dbReady = true;
   console.log('stats tracking ready');
 }
@@ -111,6 +129,8 @@ function readJson(req) {
 // be grouped and filtered rather than accumulating spellings of "chorus".
 const PARTS = ['verse', 'pre-chorus', 'chorus', 'bridge', 'intro', 'outro', 'hook', 'other'];
 
+const cleanText = (v, max) => String(v == null ? '' : v).trim().replace(/\s+/g, ' ').slice(0, max);
+
 // ---- stem splitting (LALAL.AI) ----
 // The key never reaches the browser: every call to LALAL.AI goes out from here,
 // and the finished stems are streamed back through this server so the page only
@@ -119,6 +139,7 @@ const LALAL = 'https://www.lalal.ai/api/v1';
 const LALAL_KEY = process.env.LALALAI_LICENSE_KEY || '';
 const UPLOAD_LIMIT = 30 * 1024 * 1024;   // a few minutes of mp3, well under LALAL.AI's own limit
 const STEMS = ['vocals', 'drum', 'piano', 'bass', 'guitar'];
+const STORE_LIMIT = 25 * 1024 * 1024;    // per stem, once the library keeps it
 
 function readBinary(req, limit) {
   return new Promise((resolve, reject) => {
@@ -143,6 +164,19 @@ async function lalal(path, options) {
   try { body = JSON.parse(text); } catch (e) { body = { detail: text.slice(0, 200) }; }
   if (!r.ok) throw Object.assign(new Error(body.detail || body.error || 'split service error'), { status: r.status });
   return body;
+}
+
+// Where a finished task's audio actually lives. The URL is short-lived and
+// belongs to LALAL.AI, so it is resolved here every time and never handed out.
+async function lalalTrack(taskId, wanted) {
+  const body = await lalal('/check/', {
+    method: 'POST',
+    body: JSON.stringify({ task_ids: [taskId] }),
+    headers: { 'Content-Type': 'application/json' },
+  });
+  const result = body.result && body.result[taskId];
+  if (!result || result.status !== 'success') return null;
+  return (result.result.tracks || []).find((t) => t.type === wanted) || null;
 }
 
 async function handleStems(req, res, url) {
@@ -209,15 +243,8 @@ async function handleStems(req, res, url) {
   if (url.pathname === '/api/stems/track' && req.method === 'GET') {
     const taskId = url.searchParams.get('task') || '';
     const wanted = url.searchParams.get('type') === 'back' ? 'back' : 'stem';
-    const body = await lalal('/check/', {
-      method: 'POST',
-      body: JSON.stringify({ task_ids: [taskId] }),
-      headers: { 'Content-Type': 'application/json' },
-    });
-    const result = body.result && body.result[taskId];
-    if (!result || result.status !== 'success') return send(res, 404, { error: 'not ready' });
-    const track = (result.result.tracks || []).find((t) => t.type === wanted);
-    if (!track) return send(res, 404, { error: 'not found' });
+    const track = await lalalTrack(taskId, wanted);
+    if (!track) return send(res, 404, { error: 'not ready' });
     const audio = await fetch(track.url);
     if (!audio.ok) return send(res, 502, { error: 'could not fetch the split track' });
     res.writeHead(200, {
@@ -444,6 +471,74 @@ async function handleApi(req, res, url) {
         addedBy: r.added_by, source: r.source, noteCount: r.note_count,
       })),
     });
+  }
+
+  // ---- Song Vocals: split stems kept for later ----
+  if (url.pathname === '/api/uploads' && req.method === 'POST') {
+    if (!LALAL_KEY) return send(res, 503, { error: 'splitting unavailable' });
+    const body = await readJson(req);
+    const title = cleanText(body.title, 120);
+    if (!title) return send(res, 400, { error: 'Give the track a name.' });
+    const stem = STEMS.includes(body.stem) ? body.stem : 'vocals';
+    const taskId = cleanText(body.taskId, 64);
+    // Both halves are fetched before anything is written, so a track never
+    // lands in the library with one side missing.
+    const parts = {};
+    for (const type of ['stem', 'back']) {
+      const track = await lalalTrack(taskId, type);
+      if (!track) return send(res, 404, { error: 'That split has expired — run it again.' });
+      const audio = await fetch(track.url);
+      if (!audio.ok) return send(res, 502, { error: 'could not fetch the split track' });
+      const buffer = Buffer.from(await audio.arrayBuffer());
+      if (buffer.length > STORE_LIMIT) {
+        return send(res, 413, { error: 'That track is too long to keep — split a shorter section.' });
+      }
+      parts[type] = buffer;
+    }
+    const userId = Number(body.userId);
+    const row = await pool.query(
+      `INSERT INTO uploads (user_id, added_by, title, stem, stem_audio, back_audio)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id, title, stem, added_by, created_at`,
+      [Number.isInteger(userId) && userId > 0 ? userId : null,
+       cleanText(body.addedBy, 24) || null, title, stem, parts.stem, parts.back]
+    );
+    return send(res, 200, { upload: Object.assign(row.rows[0], { id: Number(row.rows[0].id) }) });
+  }
+
+  if (url.pathname === '/api/uploads' && req.method === 'GET') {
+    // The audio itself is fetched a track at a time; listing it would send the
+    // whole library down the wire.
+    const rows = await pool.query(
+      `SELECT id, title, stem, added_by, created_at,
+              octet_length(stem_audio) AS stem_bytes
+         FROM uploads
+        ORDER BY created_at DESC
+        LIMIT 100`
+    );
+    return send(res, 200, {
+      uploads: rows.rows.map((r) => ({
+        id: Number(r.id), title: r.title, stem: r.stem, addedBy: r.added_by,
+        stemBytes: Number(r.stem_bytes), createdAt: r.created_at,
+      })),
+    });
+  }
+
+  const upload = url.pathname.match(/^\/api\/uploads\/(\d+)\/audio$/);
+  if (upload && req.method === 'GET') {
+    const column = url.searchParams.get('type') === 'back' ? 'back_audio' : 'stem_audio';
+    const row = await pool.query(`SELECT ${column} AS audio FROM uploads WHERE id = $1`, [Number(upload[1])]);
+    if (!row.rows.length) return send(res, 404, { error: 'not found' });
+    return send(res, 200, row.rows[0].audio, {
+      'Content-Type': 'audio/mpeg',
+      'Cache-Control': 'private, max-age=3600',
+    });
+  }
+
+  const dropUpload = url.pathname.match(/^\/api\/uploads\/(\d+)$/);
+  if (dropUpload && req.method === 'DELETE') {
+    await pool.query(`DELETE FROM uploads WHERE id = $1`, [Number(dropUpload[1])]);
+    return send(res, 200, { ok: true });
   }
 
   const one = url.pathname.match(/^\/api\/melodies\/(\d+)$/);

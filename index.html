@@ -554,8 +554,13 @@
       </button>
       <button class="home-btn" data-view="split" id="homeSplitBtn" hidden>
         <span class="home-icon">🎚️</span>
-        <span class="home-name">Split a track</span>
-        <span class="home-sub">Pull the vocal off your own recording</span>
+        <span class="home-name">Upload</span>
+        <span class="home-sub">Split your own track into vocal and backing</span>
+      </button>
+      <button class="home-btn" data-view="vocals" id="homeVocalsBtn" hidden>
+        <span class="home-icon">🎧</span>
+        <span class="home-name">Song Vocals</span>
+        <span class="home-sub">Tracks you split, ready to turn into notes</span>
       </button>
       <button class="home-btn" data-view="library" id="homeLibraryBtn" hidden>
         <span class="home-icon">📚</span>
@@ -958,7 +963,7 @@
     <button class="home-link" data-home>← Home</button>
     <div class="card">
       <div class="grid-title">
-        Split a track into one part and the rest of the mix
+        Upload a track and split it into one part and the rest of the mix
         <span class="key-badge" id="splitMinutes"></span>
       </div>
       <div class="controls">
@@ -996,6 +1001,40 @@
         <audio id="splitBackAudio" controls preload="none"></audio>
         <a id="splitBackLink" download>Download</a>
       </div>
+      <div class="controls" id="splitSaveRow" hidden>
+        <div class="field">
+          <label for="splitTitle">Name it</label>
+          <input id="splitTitle" type="text" maxlength="120" placeholder="Track name">
+        </div>
+      </div>
+      <button class="big-btn start-btn" id="splitSaveBtn" hidden>Save to Song Vocals</button>
+      <button class="big-btn" id="splitTranscribeBtn" hidden>Turn the vocal into notes</button>
+      <div class="split-note" id="splitSaveNote"></div>
+    </div>
+  </div>
+
+  <div id="vocalsView" hidden>
+    <button class="home-link" data-home>← Home</button>
+    <div class="card">
+      <div class="grid-title">
+        Song Vocals
+        <button class="pool-all" id="vocalsRefreshBtn">refresh</button>
+      </div>
+      <div class="library-list" id="vocalsList"></div>
+      <div class="split-note" id="vocalsNote"></div>
+    </div>
+
+    <div class="card" id="vocalsPlayCard" hidden>
+      <div class="grid-title" id="vocalsPlayTitle">Track</div>
+      <div class="split-stem">
+        <div class="stem-name" id="vocalsStemName">Vocals</div>
+        <audio id="vocalsStemAudio" controls preload="none"></audio>
+      </div>
+      <div class="split-stem">
+        <div class="stem-name" id="vocalsBackName">Everything else</div>
+        <audio id="vocalsBackAudio" controls preload="none"></audio>
+      </div>
+      <button class="big-btn start-btn" id="vocalsTranscribeBtn">Turn the vocal into notes</button>
     </div>
   </div>
 
@@ -1520,15 +1559,17 @@
   // One screen at a time, with a way back — a tab bar spends a row of a phone
   // on every view and still doesn't say where you are.
   function switchView(view) {
-    ['home', 'learn', 'practice', 'play', 'split', 'library'].forEach((v) => {
+    ['home', 'learn', 'practice', 'play', 'split', 'vocals', 'library'].forEach((v) => {
       document.getElementById(v + 'View').hidden = v !== view;
     });
     if (view !== 'learn') stopEverything(); // don't leave Learn's base/harmony notes sounding in the background
     if (view !== 'practice') stopListening(); // release the mic once it's off-screen
     if (view !== 'play') { stopRecording(); stopTakePlayback(); } // same for Play's mic + playback
     if (view !== 'split') pauseSplitAudio();  // and for the split stems
+    if (view !== 'vocals') pauseVocalsAudio();
     if (view === 'practice') practiceStep(practiceEntryStep());
     if (view === 'library') loadLibrary();
+    if (view === 'vocals') loadVocals();
     window.scrollTo(0, 0);
   }
   function initTabs() {
@@ -1817,6 +1858,7 @@
       return;
     }
     loadLibrary();
+    loadVocals();
     practiceUser = loadStoredUser();
     renderUserBox();
     if (practiceUser) refreshStats();
@@ -3834,6 +3876,8 @@
     if (splitPoll) { clearTimeout(splitPoll); splitPoll = null; }
     pauseSplitAudio();
     document.getElementById('splitResultCard').hidden = true;
+    savedSplit = null;
+    splitSaveNote('', false);
     const stem = document.getElementById('splitStemSelect').value;
     splitNote(`Uploading ${file.name}…`, false);
     splitProgress(0);
@@ -3898,6 +3942,15 @@
     backLink.download = `no-${label.toLowerCase()}.mp3`;
     document.getElementById('splitResultCard').hidden = false;
     splitNote('Done — play either part, or download it.', false);
+    // LALAL.AI drops its copy within a day, so keeping the track means keeping
+    // it here; until then the split only exists as this task.
+    savedSplit = { taskId: taskId, stem: stem, name: name };
+    document.getElementById('splitTitle').value = name.replace(/\.[^.]+$/, '');
+    document.getElementById('splitSaveRow').hidden = !trackingAvailable;
+    document.getElementById('splitSaveBtn').hidden = !trackingAvailable;
+    const transcribe = document.getElementById('splitTranscribeBtn');
+    transcribe.hidden = false;
+    transcribe.textContent = `Turn the ${label.toLowerCase()} into notes`;
   }
 
   function initSplitControls() {
@@ -3916,6 +3969,281 @@
     drop.addEventListener('drop', (e) => {
       e.preventDefault();
       startSplit(e.dataTransfer.files[0]);
+    });
+  }
+
+  // ---- Song Vocals: keep a split, then read notes off the vocal ----
+  // Transcribing a file has to end up in the same place as singing into the
+  // mic: the same frames, the same segmenter, the same editor and harmony. The
+  // only thing that differs is where the audio comes from, so everything here
+  // stops at building the frame list `finishTake` already knows how to use.
+  const DETECT_RATE = 11025;            // pitch and vowel formants both sit well under half of this
+  const DETECT_WINDOW = 1024;           // ~93ms, long enough for a low male fundamental
+  const TRANSCRIBE_MAX_MS = 60000;      // a first minute is a workable line to edit; a whole song isn't
+  let savedSplit = null;                // the split on screen, if it can still be kept
+
+  const fftRe = new Float32Array(DETECT_WINDOW);
+  const fftIm = new Float32Array(DETECT_WINDOW);
+  const fftWindow = (() => {
+    const w = new Float32Array(DETECT_WINDOW);
+    for (let i = 0; i < DETECT_WINDOW; i++) {
+      const x = (2 * Math.PI * i) / (DETECT_WINDOW - 1);
+      w[i] = 0.42 - 0.5 * Math.cos(x) + 0.08 * Math.cos(2 * x);   // Blackman, as AnalyserNode uses
+    }
+    return w;
+  })();
+
+  // Iterative radix-2 FFT, in place. An AnalyserNode only ever reports the
+  // present moment, so a file that is being read faster than real time needs
+  // its own spectrum to measure the same thing.
+  function fftInPlace(re, im) {
+    const n = re.length;
+    for (let i = 1, j = 0; i < n; i++) {
+      let bit = n >> 1;
+      for (; j & bit; bit >>= 1) j ^= bit;
+      j ^= bit;
+      if (i < j) {
+        let t = re[i]; re[i] = re[j]; re[j] = t;
+        t = im[i]; im[i] = im[j]; im[j] = t;
+      }
+    }
+    for (let len = 2; len <= n; len <<= 1) {
+      const ang = -2 * Math.PI / len, half = len / 2;
+      const wr = Math.cos(ang), wi = Math.sin(ang);
+      for (let i = 0; i < n; i += len) {
+        let cr = 1, ci = 0;
+        for (let k = 0; k < half; k++) {
+          const ur = re[i + k], ui = im[i + k];
+          const vr = re[i + k + half] * cr - im[i + k + half] * ci;
+          const vi = re[i + k + half] * ci + im[i + k + half] * cr;
+          re[i + k] = ur + vr; im[i + k] = ui + vi;
+          re[i + k + half] = ur - vr; im[i + k + half] = ui - vi;
+          const ncr = cr * wr - ci * wi;
+          ci = cr * wi + ci * wr;
+          cr = ncr;
+        }
+      }
+    }
+  }
+
+  // Magnitudes in dB, scaled by the window size — the same units
+  // getFloatFrequencyData reports, so the flux thresholds carry over.
+  function spectrumDb(buf, out) {
+    for (let i = 0; i < DETECT_WINDOW; i++) { fftRe[i] = buf[i] * fftWindow[i]; fftIm[i] = 0; }
+    fftInPlace(fftRe, fftIm);
+    for (let i = 0; i < out.length; i++) {
+      const mag = Math.sqrt(fftRe[i] * fftRe[i] + fftIm[i] * fftIm[i]) / DETECT_WINDOW;
+      out[i] = 20 * Math.log10(Math.max(mag, 1e-12));
+    }
+  }
+
+  async function samplesForDetection(arrayBuffer) {
+    ensureAudio();
+    const decoded = await audioCtx.decodeAudioData(arrayBuffer);
+    const seconds = Math.min(decoded.duration, TRANSCRIBE_MAX_MS / 1000);
+    // Autocorrelation costs the square of the window, so a stem is folded to
+    // one channel at a low rate first — otherwise a minute of audio takes
+    // longer to read than to sing.
+    const off = new OfflineAudioContext(1, Math.ceil(seconds * DETECT_RATE), DETECT_RATE);
+    const src = off.createBufferSource();
+    src.buffer = decoded;
+    src.connect(off.destination);
+    src.start();
+    const rendered = await off.startRendering();
+    return { samples: rendered.getChannelData(0), duration: decoded.duration };
+  }
+
+  function framesFromSamples(samples, rate) {
+    const hop = Math.max(1, Math.round((rate * REC_FRAME_MS) / 1000));
+    const win = new Float32Array(DETECT_WINDOW);
+    const spec = new Float32Array(DETECT_WINDOW / 2);
+    const prev = new Float32Array(DETECT_WINDOW / 2);
+    let havePrev = false;
+    const frames = [];
+    for (let start = 0; start + DETECT_WINDOW <= samples.length; start += hop) {
+      win.set(samples.subarray(start, start + DETECT_WINDOW));
+      let rms = 0;
+      for (let i = 0; i < DETECT_WINDOW; i++) rms += win[i] * win[i];
+      rms = Math.sqrt(rms / DETECT_WINDOW);
+      const freq = autoCorrelate(win, rate);
+      const midi = freq === -1 ? null : Math.round(69 + 12 * Math.log2(freq / 440));
+      spectrumDb(win, spec);
+      let flux = 0;
+      if (havePrev) {
+        let active = 0;
+        for (let i = 0; i < spec.length; i++) {
+          if (spec[i] < FLUX_BIN_FLOOR && prev[i] < FLUX_BIN_FLOOR) continue;
+          active++;
+          if (spec[i] > prev[i]) flux += spec[i] - prev[i];
+        }
+        flux = active >= FLUX_MIN_BINS ? flux / active : 0;
+      }
+      prev.set(spec);
+      havePrev = true;
+      frames.push({ midi: midi, rms: rms, flux: flux, t: (start / rate) * 1000 });
+    }
+    return frames;
+  }
+
+  // Reads a stem into the Play editor: notes, key, chords and harmony all come
+  // out of the take machinery, so an imported line behaves exactly like a sung
+  // one and can be edited, replayed and saved the same way.
+  async function transcribeStem(url, title, note) {
+    note('Reading the vocal…', false);
+    let frames;
+    try {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`could not load that track (${res.status})`);
+      const { samples, duration } = await samplesForDetection(await res.arrayBuffer());
+      note('Finding the notes…', false);
+      // Let the status paint before the detector takes the thread.
+      await new Promise((r) => setTimeout(r, 30));
+      frames = framesFromSamples(samples, DETECT_RATE);
+      if (duration > TRANSCRIBE_MAX_MS / 1000) {
+        note(`Read the first minute of ${title} — trim the file for a later section.`, false);
+      } else {
+        note('', false);
+      }
+    } catch (e) {
+      note(e.message, true);
+      return;
+    }
+    recFrames = frames;
+    speechWords = [];                   // a stem carries no words the browser can hear
+    switchView('play');
+    setMelodySource('voice');
+    finishTake();
+    document.getElementById('saveSong').value = title;
+    document.getElementById('transcriptCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  function splitSaveNote(text, isError) {
+    const el = document.getElementById('splitSaveNote');
+    el.textContent = text;
+    el.className = 'split-note' + (isError ? ' error' : '');
+  }
+
+  async function saveSplitToVocals() {
+    if (!savedSplit) return;
+    const btn = document.getElementById('splitSaveBtn');
+    btn.disabled = true;
+    splitSaveNote('Keeping both parts…', false);
+    try {
+      await api('/api/uploads', {
+        method: 'POST',
+        body: JSON.stringify({
+          taskId: savedSplit.taskId,
+          stem: savedSplit.stem,
+          title: document.getElementById('splitTitle').value,
+          userId: practiceUser ? practiceUser.id : null,
+          addedBy: practiceUser ? practiceUser.username : null,
+        }),
+      });
+      splitSaveNote('Saved to Song Vocals.', false);
+      await loadVocals();
+    } catch (e) {
+      splitSaveNote(e.message, true);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function pauseVocalsAudio() {
+    ['vocalsStemAudio', 'vocalsBackAudio'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.pause();
+    });
+  }
+
+  function vocalsNote(text, isError) {
+    const el = document.getElementById('vocalsNote');
+    el.textContent = text;
+    el.className = 'split-note' + (isError ? ' error' : '');
+  }
+
+  async function loadVocals() {
+    if (!trackingAvailable) return;
+    let uploads;
+    try {
+      ({ uploads } = await api('/api/uploads'));
+    } catch (e) {
+      document.getElementById('homeVocalsBtn').hidden = true;
+      return;
+    }
+    document.getElementById('homeVocalsBtn').hidden = false;
+    const list = document.getElementById('vocalsList');
+    if (!uploads.length) {
+      list.innerHTML = '<div class="day-empty">Nothing here yet — split a track on Upload and save it.</div>';
+      return;
+    }
+    list.innerHTML = '';
+    uploads.forEach((u) => {
+      const row = document.createElement('div');
+      row.className = 'library-row';
+      const main = document.createElement('div');
+      main.className = 'library-main';
+      const title = document.createElement('div');
+      title.className = 'library-title';
+      title.textContent = u.title;
+      const sub = document.createElement('div');
+      sub.className = 'library-sub';
+      sub.textContent = `${(u.stemBytes / 1048576).toFixed(1)} MB` + (u.addedBy ? ` · ${u.addedBy}` : '');
+      main.appendChild(title);
+      main.appendChild(sub);
+      const part = document.createElement('span');
+      part.className = 'library-part';
+      part.textContent = STEM_LABELS[u.stem] || u.stem;
+      const open = document.createElement('button');
+      open.className = 'line-btn';
+      open.textContent = 'open';
+      open.addEventListener('click', () => openVocalTrack(u));
+      const del = document.createElement('button');
+      del.className = 'line-btn danger';
+      del.textContent = '✕';
+      del.addEventListener('click', async () => {
+        pauseVocalsAudio();
+        try {
+          await api(`/api/uploads/${u.id}`, { method: 'DELETE' });
+          document.getElementById('vocalsPlayCard').hidden = true;
+          await loadVocals();
+        } catch (e) {
+          vocalsNote(e.message, true);
+        }
+      });
+      row.appendChild(main);
+      row.appendChild(part);
+      row.appendChild(open);
+      row.appendChild(del);
+      list.appendChild(row);
+    });
+  }
+
+  function openVocalTrack(upload) {
+    pauseVocalsAudio();
+    const label = STEM_LABELS[upload.stem] || upload.stem;
+    const url = (type) => `/api/uploads/${upload.id}/audio?type=${type}`;
+    document.getElementById('vocalsPlayTitle').textContent = upload.title;
+    document.getElementById('vocalsStemName').textContent = label;
+    document.getElementById('vocalsBackName').textContent = `Everything but the ${label.toLowerCase()}`;
+    document.getElementById('vocalsStemAudio').src = url('stem');
+    document.getElementById('vocalsBackAudio').src = url('back');
+    const btn = document.getElementById('vocalsTranscribeBtn');
+    btn.textContent = `Turn the ${label.toLowerCase()} into notes`;
+    btn.onclick = () => transcribeStem(url('stem'), upload.title, vocalsNote);
+    document.getElementById('vocalsPlayCard').hidden = false;
+    vocalsNote('', false);
+  }
+
+  function initVocalsControls() {
+    document.getElementById('vocalsRefreshBtn').addEventListener('click', loadVocals);
+    document.getElementById('splitSaveBtn').addEventListener('click', saveSplitToVocals);
+    document.getElementById('splitTranscribeBtn').addEventListener('click', () => {
+      if (!savedSplit) return;
+      transcribeStem(
+        `/api/stems/track?task=${encodeURIComponent(savedSplit.taskId)}&type=stem`,
+        document.getElementById('splitTitle').value || savedSplit.name,
+        splitSaveNote
+      );
     });
   }
 
@@ -4017,6 +4345,7 @@
   initModeSwitch();
   initPracticeControls();
   initSplitControls();
+  initVocalsControls();
   loadSplitAvailability();
   initTracking();
   initPlayControls();
