@@ -219,6 +219,10 @@ async function handleApi(req, res, url) {
     const today = isDay(url.searchParams.get('today'))
       ? url.searchParams.get('today')
       : dayKey(new Date());
+    // The history screen walks every day from the day the name was claimed, so
+    // a day with nothing on it reads as a gap rather than simply being absent.
+    const since = await pool.query(`SELECT created_at FROM users WHERE id = $1`, [userId]);
+    if (!since.rows.length) return send(res, 404, { error: 'unknown user' });
     const rows = await pool.query(
       `SELECT day,
               COUNT(*)::int                              AS total,
@@ -238,7 +242,8 @@ async function handleApi(req, res, url) {
       { total: 0, correct: 0, days: 0 }
     );
     return send(res, 200, {
-      days: days.slice(0, 30),
+      since: dayKey(since.rows[0].created_at),
+      days: days,
       today: days.find((d) => d.day === today) || { day: today, total: 0, correct: 0, skipped: 0 },
       streak: streakFrom(days, today),
       bestStreak: bestStreakFrom(days),

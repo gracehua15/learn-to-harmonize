@@ -24,7 +24,7 @@
     --border: #d9d0bd;
     /* Fills are mid-dark, so anything sitting on one needs light text. */
     --on-fill: #fbfaf4;
-    --danger: #a8443c;
+    --danger: #9e3d36;
     --accent-grad: linear-gradient(135deg, #5b8f6f, #3f7256);
     --base-grad: linear-gradient(135deg, #4a8c6a, #2f6b4e);
     --harm-grad: linear-gradient(135deg, #c08a3c, #94682a);
@@ -47,22 +47,41 @@
   header h1 span { color: var(--accent2); }
   header p { color: var(--muted); font-size: 13px; margin-top: 4px; }
 
-  /* Sticky so it stays reachable once a tab's content grows past one screen —
-     otherwise scrolling down loses the only way back to another tab. */
-  .tabs {
-    display: flex; justify-content: center; gap: 8px;
+  /* Home: three doors, then one thing on screen at a time. On a phone a tab bar
+     costs a row of screen on every view and still hides where you are. */
+  .home-menu { display: flex; flex-direction: column; gap: 12px; margin-top: 8px; }
+  .home-btn {
+    display: grid; grid-template-columns: auto 1fr; grid-template-rows: auto auto;
+    gap: 2px 14px; align-items: center; text-align: left;
+    padding: 18px 18px; border-radius: 16px;
+    border: 1px solid var(--border); background: var(--card);
+    box-shadow: 0 1px 2px rgba(80, 68, 45, 0.05); color: var(--text);
+  }
+  .home-btn:active { background: var(--card2); }
+  .home-icon { grid-row: 1 / 3; font-size: 30px; line-height: 1; }
+  .home-name { font-size: 19px; font-weight: 800; }
+  .home-sub { font-size: 12px; color: var(--muted); }
+  /* Sticky so the way back survives a long screen. */
+  .home-link {
     position: sticky; top: 0; z-index: 10;
-    margin: 0 -16px 20px; padding: 16px 16px 10px;
-    background: rgba(236, 229, 214, 0.92);
+    display: block; width: calc(100% + 32px); margin: 0 -16px 12px; padding: 12px 16px;
+    text-align: left; font-size: 13px; font-weight: 700; color: var(--accent-ink);
+    background: rgba(236, 229, 214, 0.94); border: none;
     -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
   }
-  .tab {
-    padding: 7px 16px; border-radius: 999px; font-size: 13px; font-weight: 600;
-    border: 1px solid var(--border); color: var(--muted); background: var(--card);
-  }
-  .tab.active { background: var(--accent-grad); color: var(--on-fill); border-color: transparent; }
-  .tab.soon { opacity: 0.45; }
-  .tab.soon::after { content: " · soon"; font-weight: 400; font-size: 10px; }
+
+  .step-menu { display: flex; flex-direction: column; gap: 12px; }
+  .mode-switch.stacked { grid-template-columns: 1fr; }
+  .continue-btn { margin-top: 12px; }
+
+  /* Learn: base notes down one half, the harmonies for them down the other */
+  .learn-split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; align-items: start; }
+  .learn-split .grid-title { margin-bottom: 8px; }
+  .learn-split #noteGrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .learn-split .note-row { display: contents; }
+  .learn-split .harmony-panel { grid-template-columns: repeat(2, 1fr); gap: 6px; }
+  .learn-split .harm-btn { padding: 12px 2px; font-size: 12px; }
+  .learn-split .note-btn { padding: 12px 0; font-size: 13px; }
 
   .card {
     background: var(--card);
@@ -310,15 +329,20 @@
   .day-row .day-count strong { color: var(--text); }
   .day-empty { font-size: 12px; color: var(--muted); }
 
-  /* Play: tapping in a melody on a keyboard */
-  .entry-keys { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; margin-bottom: 10px; }
-  .entry-key {
-    padding: 14px 0; border-radius: 10px; border: 1px solid var(--border);
-    background: var(--card2); color: var(--text);
-    font-size: 13px; font-weight: 700; font-variant-numeric: tabular-nums;
+  /* Play: a keyboard you actually hold, since how long you hold a key is how
+     long the note is */
+  .entry-controls { align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .held-readout {
+    font-size: 12px; font-weight: 700; color: var(--accent-ink);
+    font-variant-numeric: tabular-nums; text-align: right; flex: 1; min-width: 0;
   }
-  .entry-key.sharp { background: var(--card); color: var(--muted); }
-  .entry-key:active, .entry-key.hit { background: var(--base-grad); color: var(--on-fill); border-color: transparent; }
+  .entry-piano {
+    position: relative; margin: 0 auto 10px; touch-action: none;
+    background: #4a4237; border: 1px solid #3a332a; border-radius: 0 0 10px 10px;
+  }
+  .entry-piano .key { cursor: pointer; }
+  .entry-piano .key.white.held { background: linear-gradient(#84c4a3, var(--base-color)); }
+  .entry-piano .key.black.held { background: linear-gradient(#57a37f, #2b6046); }
   .entry-actions { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
   .entry-actions .edit-btn { flex: 1 1 auto; }
 
@@ -493,14 +517,33 @@
     <code>http://localhost:8000</code>.
   </div>
 
-  <div class="tabs">
-    <div class="tab active" data-view="learn">Learn</div>
-    <div class="tab" data-view="practice">Practice</div>
-    <div class="tab" data-view="play">Play</div>
-    <div class="tab soon">Quiz</div>
+  <div id="homeView">
+    <div class="home-menu">
+      <button class="home-btn" data-view="learn">
+        <span class="home-icon">🎼</span>
+        <span class="home-name">Learn</span>
+        <span class="home-sub">Hear a harmony against a note you hold</span>
+      </button>
+      <button class="home-btn" data-view="practice">
+        <span class="home-icon">🎤</span>
+        <span class="home-name">Practice</span>
+        <span class="home-sub">Sing the harmony — and build a streak</span>
+      </button>
+      <button class="home-btn" data-view="play">
+        <span class="home-icon">🎹</span>
+        <span class="home-name">Play</span>
+        <span class="home-sub">Make a melody and harmonize it</span>
+      </button>
+      <button class="home-btn" data-view="library" id="homeLibraryBtn" hidden>
+        <span class="home-icon">📚</span>
+        <span class="home-name">Melody library</span>
+        <span class="home-sub">Melodies everyone has saved</span>
+      </button>
+    </div>
   </div>
 
-  <div id="learnView">
+  <div id="learnView" hidden>
+    <button class="home-link" data-home>← Home</button>
     <div class="card">
       <div class="controls">
         <div class="field">
@@ -550,22 +593,26 @@
     </div>
 
     <div class="card">
-      <div class="grid-title">Tap a note to sustain it as your base pitch</div>
-      <div id="noteGrid"></div>
-    </div>
-
-    <div class="card">
-      <div class="grid-title">Hold a button to hear that harmony — each plays the note that belongs in the selected key</div>
-      <div class="harmony-panel disabled" id="harmonyPanel"></div>
-      <div class="hint" id="hintText">Pick a note above to begin.</div>
+      <div class="learn-split">
+        <div class="learn-col">
+          <div class="grid-title">Base note</div>
+          <div id="noteGrid"></div>
+        </div>
+        <div class="learn-col">
+          <div class="grid-title">Harmony — hold one</div>
+          <div class="harmony-panel disabled" id="harmonyPanel"></div>
+        </div>
+      </div>
+      <div class="hint" id="hintText">Pick a note to begin.</div>
     </div>
   </div>
 
   <div id="practiceView" hidden>
-    <div id="practiceSetup">
-      <div class="card" id="userCard" hidden>
+    <button class="home-link" data-home>← Home</button>
+    <div id="pStepUser" hidden>
+      <div class="card" id="userCard">
         <div id="signInBox">
-          <div class="grid-title">Pick a name to track your practice</div>
+          <div class="grid-title">Who's practising?</div>
           <div class="signin-row">
             <input type="text" id="usernameInput" class="lyrics-input" maxlength="24"
                    placeholder="your name" autocomplete="off" spellcheck="false">
@@ -583,14 +630,44 @@
             </div>
             <button class="line-btn" id="signOutBtn">switch</button>
           </div>
-          <div class="stat-row" id="statRow"></div>
-          <div class="day-list" id="dayList"></div>
+          <button class="big-btn start-btn continue-btn" id="userContinueBtn">Continue →</button>
         </div>
       </div>
+    </div>
 
+    <div id="pStepMenu" hidden>
+      <button class="back-link" data-pback="user">← Change name</button>
       <div class="card">
-        <div class="grid-title">Exercise</div>
-        <div class="mode-switch" id="modeSwitch">
+        <div class="stat-row" id="statRow"></div>
+      </div>
+      <div class="step-menu">
+        <button class="home-btn" id="menuPracticeBtn">
+          <span class="home-icon">🎤</span>
+          <span class="home-name">Practice</span>
+          <span class="home-sub">Sing harmonies and add to today's count</span>
+        </button>
+        <button class="home-btn" id="menuHistoryBtn">
+          <span class="home-icon">🔥</span>
+          <span class="home-name">Streak history</span>
+          <span class="home-sub">Every day since you started</span>
+        </button>
+      </div>
+    </div>
+
+    <div id="pStepHistory" hidden>
+      <button class="back-link" data-pback="menu">← Back</button>
+      <div class="card">
+        <div class="grid-title" id="historyTitle">Streak history</div>
+        <div class="stat-row" id="historyStatRow"></div>
+        <div class="day-list" id="dayList"></div>
+      </div>
+    </div>
+
+    <div id="pStepExercise" hidden>
+      <button class="back-link" data-pback="menu">← Back</button>
+      <div class="card">
+        <div class="grid-title">Which exercise?</div>
+        <div class="mode-switch stacked" id="modeSwitch">
           <button class="mode-btn active" data-mode="interval">
             Note Harmonization<span>Sing a set interval to a given note</span>
           </button>
@@ -598,8 +675,12 @@
             Scale Harmonization<span>Sing the right harmony note, within the constraints of a scale</span>
           </button>
         </div>
+        <button class="big-btn start-btn continue-btn" id="exerciseContinueBtn">Continue →</button>
       </div>
+    </div>
 
+    <div id="pStepOptions" hidden>
+      <button class="back-link" data-pback="exercise">← Change exercise</button>
       <div class="card">
         <div class="controls">
           <div class="field" id="keyField" hidden>
@@ -651,7 +732,7 @@
     </div>
 
     <div id="practiceSession" hidden>
-      <button class="back-link" id="backToSetupBtn">← Change keys / intervals</button>
+      <button class="back-link" id="backToSetupBtn">← Change options</button>
 
       <div class="card">
         <div class="prompt" id="practicePrompt">Press "New round" to begin.</div>
@@ -684,6 +765,7 @@
   </div>
 
   <div id="playView" hidden>
+    <button class="home-link" data-home>← Home</button>
     <div class="card">
       <div class="grid-title">Make a melody — it gets written out as piano notes, played back, and harmonized</div>
       <div class="mode-switch" id="sourceSwitch">
@@ -691,7 +773,7 @@
           🎤 Record singing<span>Sing it and let the app work out the notes</span>
         </button>
         <button class="mode-btn" data-source="piano">
-          🎹 Play piano<span>Tap the keys — every note lands exactly where you put it</span>
+          🎹 Play piano<span>Hold each key for as long as the note should last</span>
         </button>
       </div>
     </div>
@@ -706,11 +788,7 @@
     </div>
 
     <div class="card" id="pianoSourceCard" hidden>
-      <div class="controls">
-        <div class="field">
-          <label for="entryLengthSelect">Note length</label>
-          <select id="entryLengthSelect"></select>
-        </div>
+      <div class="controls entry-controls">
         <div class="field">
           <label for="entryOctaveSelect">Octave</label>
           <select id="entryOctaveSelect">
@@ -719,14 +797,15 @@
             <option value="5">C5 – B6</option>
           </select>
         </div>
+        <div class="held-readout" id="entryHeld">Hold a key — how long you hold it sets the note</div>
       </div>
-      <div class="entry-keys" id="entryKeys"></div>
+      <div id="entryPiano" class="entry-piano"></div>
       <div class="entry-actions">
         <button class="edit-btn" id="entryRestBtn">＋ Rest</button>
         <button class="edit-btn" id="entryUndoBtn">⌫ Undo note</button>
         <button class="edit-btn danger" id="entryClearBtn">✕ Clear</button>
       </div>
-      <div class="rec-meta"><span id="entryStatus">Tap keys to build a melody</span></div>
+      <div class="rec-meta"><span id="entryStatus">Play the keyboard to build a melody</span></div>
     </div>
 
     <div class="card" id="transcriptCard" hidden>
@@ -834,18 +913,21 @@
       <div class="signin-note" id="saveNote"></div>
     </div>
 
-    <div class="card" id="libraryCard" hidden>
-      <div class="grid-title">
-        Melody library
-        <button class="pool-all" id="libraryRefreshBtn">refresh</button>
-      </div>
-      <div class="library-list" id="libraryList"></div>
-    </div>
-
     <div class="card" id="songCard" hidden>
       <div class="grid-title">Song — each line keeps its own key and harmony</div>
       <div class="song-lines" id="songLines"></div>
       <button class="big-btn start-btn" id="playSongBtn">▶ Play whole song</button>
+    </div>
+  </div>
+
+  <div id="libraryView" hidden>
+    <button class="home-link" data-home>← Home</button>
+    <div class="card" id="libraryCard">
+      <div class="grid-title">
+        Melodies everyone has saved
+        <button class="pool-all" id="libraryRefreshBtn">refresh</button>
+      </div>
+      <div class="library-list" id="libraryList"></div>
     </div>
   </div>
 
@@ -1174,7 +1256,7 @@
       setHarmonyEnabled(false);
       updatePianoHighlights();
       updateNowPlaying();
-      document.getElementById('hintText').textContent = 'Pick a note above to begin.';
+      document.getElementById('hintText').textContent = 'Pick a note to begin.';
       return;
     }
     if (baseVoice) stopVoice(baseVoice);
@@ -1185,7 +1267,7 @@
     setHarmonyEnabled(true);
     updatePianoHighlights();
     updateNowPlaying();
-    document.getElementById('hintText').textContent = 'Hold a harmony button below while the base note sustains.';
+    document.getElementById('hintText').textContent = 'Hold a harmony button while the base note sustains.';
   }
 
   // ---- harmony ----
@@ -1254,7 +1336,7 @@
   }
 
   // ---- piano (shared by Learn and Practice) ----
-  function renderPiano(pianoEl, low, high) {
+  function renderPiano(pianoEl, low, high, opts) {
     pianoEl.innerHTML = '';
     const whitePc = new Set([0, 2, 4, 5, 7, 9, 11]);
     const blackPc = new Set([1, 3, 6, 8, 10]);
@@ -1263,7 +1345,9 @@
       if (whitePc.has(((m % 12) + 12) % 12)) whiteKeys.push(m);
     }
 
-    const whiteW = 30, whiteH = 140, blackW = 18, blackH = 88;
+    const o = opts || {};
+    const whiteW = o.whiteW || 30, whiteH = o.whiteH || 140;
+    const blackW = Math.round(whiteW * 0.6), blackH = Math.round(whiteH * 0.63);
     pianoEl.style.width = (whiteKeys.length * whiteW) + 'px';
     pianoEl.style.height = whiteH + 'px';
 
@@ -1274,7 +1358,7 @@
       key.style.left = (i * whiteW) + 'px';
       key.style.width = whiteW + 'px';
       key.style.height = whiteH + 'px';
-      if (((m % 12) + 12) % 12 === 0) {
+      if (o.labelAll || ((m % 12) + 12) % 12 === 0) {
         const lbl = document.createElement('span');
         lbl.className = 'key-label';
         lbl.textContent = noteName(m);
@@ -1361,23 +1445,60 @@
     buildPiano();
     updatePianoHighlights();
     updateNowPlaying();
-    document.getElementById('hintText').textContent = 'Pick a note above to begin.';
+    document.getElementById('hintText').textContent = 'Pick a note to begin.';
   }
 
   // ---- tabs ----
+  // One screen at a time, with a way back — a tab bar spends a row of a phone
+  // on every view and still doesn't say where you are.
   function switchView(view) {
-    document.getElementById('learnView').hidden = view !== 'learn';
-    document.getElementById('practiceView').hidden = view !== 'practice';
-    document.getElementById('playView').hidden = view !== 'play';
-    document.querySelectorAll('.tab[data-view]').forEach((t) => t.classList.toggle('active', t.dataset.view === view));
+    ['home', 'learn', 'practice', 'play', 'library'].forEach((v) => {
+      document.getElementById(v + 'View').hidden = v !== view;
+    });
     if (view !== 'learn') stopEverything(); // don't leave Learn's base/harmony notes sounding in the background
     if (view !== 'practice') stopListening(); // release the mic once it's off-screen
     if (view !== 'play') { stopRecording(); stopTakePlayback(); } // same for Play's mic + playback
+    if (view === 'practice') practiceStep(practiceEntryStep());
+    if (view === 'library') loadLibrary();
+    window.scrollTo(0, 0);
   }
   function initTabs() {
-    document.querySelectorAll('.tab[data-view]').forEach((t) => {
-      t.addEventListener('click', () => switchView(t.dataset.view));
+    document.querySelectorAll('#homeView .home-btn[data-view]').forEach((b) => {
+      b.addEventListener('click', () => switchView(b.dataset.view));
     });
+    document.querySelectorAll('[data-home]').forEach((b) => {
+      b.addEventListener('click', () => switchView('home'));
+    });
+    document.querySelectorAll('[data-pback]').forEach((b) => {
+      b.addEventListener('click', () => practiceStep(b.dataset.pback));
+    });
+  }
+
+  // Practice is a short path rather than one long page: name, then what you came
+  // for, then which drill, then its options, then the round itself.
+  const PRACTICE_STEPS = ['user', 'menu', 'history', 'exercise', 'options', 'session'];
+  let currentPracticeStep = 'user';
+
+  function stepElement(step) {
+    return step === 'session'
+      ? document.getElementById('practiceSession')
+      : document.getElementById('pStep' + step.charAt(0).toUpperCase() + step.slice(1));
+  }
+
+  function practiceStep(step) {
+    currentPracticeStep = step;
+    PRACTICE_STEPS.forEach((s) => { stepElement(s).hidden = s !== step; });
+    if (step !== 'session') stopListening();   // the mic belongs to the round only
+    if (step === 'menu' || step === 'history') refreshStats();
+    if (step === 'history') loadHistory();
+    window.scrollTo(0, 0);
+  }
+
+  // Where Practice opens depends on whether it knows who you are. With no
+  // tracking at all there is no name to ask for, so it opens on the drills.
+  function practiceEntryStep() {
+    if (!trackingAvailable) return 'exercise';
+    return practiceUser ? 'menu' : 'user';
   }
 
   // ---- practice: state ----
@@ -1622,12 +1743,15 @@
     } catch (e) {
       trackingAvailable = false;
     }
-    document.getElementById('userCard').hidden = !trackingAvailable;
-    if (!trackingAvailable) return;
+    if (!trackingAvailable) {
+      practiceStep('exercise');
+      return;
+    }
     loadLibrary();
     practiceUser = loadStoredUser();
     renderUserBox();
     if (practiceUser) refreshStats();
+    practiceStep(practiceEntryStep());
   }
 
   function renderUserBox() {
@@ -1641,6 +1765,48 @@
     const el = document.getElementById('signInNote');
     el.textContent = text;
     el.className = 'signin-note' + (isError ? ' error' : '');
+  }
+
+  // Every day from the day the name was claimed to today, so a gap reads as a
+  // gap rather than simply being absent from the list.
+  async function loadHistory() {
+    if (!practiceUser || !trackingAvailable) return;
+    const today = localDay();
+    let stats;
+    try {
+      stats = await api(`/api/stats?userId=${practiceUser.id}&today=${today}`);
+    } catch (e) {
+      return;
+    }
+    document.getElementById('historyTitle').textContent =
+      `Every day since ${new Date((stats.since || today) + 'T00:00:00')
+        .toLocaleDateString(undefined, { month: 'long', day: 'numeric', year: 'numeric' })}`;
+    document.getElementById('historyStatRow').innerHTML =
+      statTile(stats.streak, 'Day streak', 'streak-stat') +
+      statTile(stats.bestStreak, 'Best run') +
+      statTile(stats.totals.days, stats.totals.days === 1 ? 'Day practised' : 'Days practised');
+
+    const byDay = {};
+    stats.days.forEach((d) => { byDay[d.day] = d; });
+    const rows = [];
+    const cursor = new Date(today + 'T00:00:00');
+    const start = new Date((stats.since || today) + 'T00:00:00');
+    while (cursor >= start && rows.length < 400) {
+      const key = localDay(cursor);
+      rows.push(byDay[key] || { day: key, total: 0, correct: 0, skipped: 0 });
+      cursor.setDate(cursor.getDate() - 1);
+    }
+    const busiest = Math.max(1, ...rows.map((d) => d.total));
+    document.getElementById('dayList').innerHTML = rows.map((d) => {
+      const done = d.total > 0;
+      return `<div class="day-row${d.day === today ? ' today' : ''}${done ? '' : ' missed'}">` +
+        `<span class="day-date">${dayLabel(d.day, today)}</span>` +
+        `<span class="day-bar" style="max-width:${Math.round((100 * d.total) / busiest)}%">` +
+          `<span style="width:${done ? Math.round((100 * d.correct) / d.total) : 0}%"></span></span>` +
+        `<span class="day-count">${done
+          ? `<strong>${d.correct}</strong> of ${d.total} right`
+          : '—'}</span></div>`;
+    }).join('');
   }
 
   async function signIn() {
@@ -1664,6 +1830,7 @@
         ? 'Tracking from today'
         : 'Welcome back — picking up where you left off';
       await refreshStats();
+      practiceStep('menu');
     } catch (e) {
       setSignInNote(e.message, true);
     } finally {
@@ -1677,6 +1844,7 @@
     document.getElementById('usernameInput').value = '';
     setSignInNote('No password — the name is how your streak finds you again.', false);
     renderUserBox();
+    practiceStep('user');
   }
 
   function statTile(value, label, cls) {
@@ -1710,22 +1878,6 @@
       statTile(`${stats.today.correct}/${stats.today.total}`, 'Today') +
       statTile(pct, 'All-time right');
 
-    const list = document.getElementById('dayList');
-    const days = stats.days.slice(0, 7);
-    if (!days.length) {
-      list.innerHTML = '<div class="day-empty">No notes yet — start a session below.</div>';
-      return;
-    }
-    const busiest = Math.max(...days.map((d) => d.total), 1);
-    list.innerHTML = days.map((d) => {
-      const width = Math.round((100 * d.correct) / busiest);
-      const bar = Math.round((100 * d.total) / busiest);
-      return `<div class="day-row${d.day === today ? ' today' : ''}">` +
-        `<span class="day-date">${dayLabel(d.day, today)}</span>` +
-        `<span class="day-bar" style="max-width:${bar}%"><span style="width:${d.total ? Math.round((100 * d.correct) / d.total) : 0}%"></span></span>` +
-        `<span class="day-count"><strong>${d.correct}</strong> of ${d.total} right</span>` +
-        `</div>`;
-    }).join('');
   }
 
   // A round produces exactly one attempt: solved, or skipped. Recording is
@@ -1792,6 +1944,10 @@
       if (e.key === 'Enter') signIn();
     });
     document.getElementById('signOutBtn').addEventListener('click', signOut);
+    document.getElementById('userContinueBtn').addEventListener('click', () => practiceStep('menu'));
+    document.getElementById('menuPracticeBtn').addEventListener('click', () => practiceStep('exercise'));
+    document.getElementById('menuHistoryBtn').addEventListener('click', () => practiceStep('history'));
+    document.getElementById('exerciseContinueBtn').addEventListener('click', () => practiceStep('options'));
     document.getElementById('nextBtn').addEventListener('click', () => {
       if (!roundSolved) return;         // Next is earned, not a second Skip
       generateRound();
@@ -1820,8 +1976,7 @@
         return;
       }
       document.getElementById('setupError').hidden = true;
-      document.getElementById('practiceSetup').hidden = true;
-      document.getElementById('practiceSession').hidden = false;
+      practiceStep('session');
       // The scale drill stays in one key for the whole session — that is what
       // makes hearing a degree against a tonic possible.
       practiceFixedKey = { root: practiceKeyRoot, type: practiceScaleType };
@@ -1833,8 +1988,7 @@
     });
     document.getElementById('backToSetupBtn').addEventListener('click', () => {
       stopListening(); // don't leave the mic open while picking new settings
-      document.getElementById('practiceSession').hidden = true;
-      document.getElementById('practiceSetup').hidden = false;
+      practiceStep('options');
     });
   }
 
@@ -3107,6 +3261,7 @@
     // a rough first draft the singer corrects, never as the source of truth.
     setLyricsFromText(speechWords.join(' '));
     syncLyricsInput();
+    clearSaveForm();
     const hasNotes = takeNotes.length > 0;
     showTakeCards(hasNotes);
     if (!hasNotes) {
@@ -3327,7 +3482,6 @@
   // editor, same harmony — only the way the notes arrive differs.
   let melodySource = 'voice';
   let entryOctave = 4;
-  let entryLengthMs = DEFAULT_LENGTH_MS;
   let pendingRestMs = 0;
 
   function setMelodySource(source) {
@@ -3343,31 +3497,85 @@
     document.getElementById('transcriptTitle').textContent =
       source === 'piano' ? 'Melody — what you played' : 'Melody — what you sang';
     if (source === 'piano' && recording) stopRecording();
+    releaseEntryKey();                  // never leave a key sounding behind a switch
     stopTakePlayback();
+    if (source === 'piano') renderEntryKeys();   // size the keyboard once it is on screen
   }
 
+  // The keyboard is played, not tapped: the note lasts as long as the key is
+  // held, then snaps to the nearest standard length. Two octaves sized to the
+  // screen, with the octave picker moving the window rather than a scrollbar.
+  let heldKey = null;                   // { midi, el, startedAt, voice }
+  let heldTimer = null;
+
   function renderEntryKeys() {
-    const grid = document.getElementById('entryKeys');
-    grid.innerHTML = '';
-    // Two octaves is enough to write a phrase without scrolling, and the octave
-    // picker moves the window when it isn't.
-    for (let i = 0; i < 24; i++) {
-      const midi = 12 * (entryOctave + 1) + i;
-      const btn = document.createElement('button');
-      const name = noteName(midi);
-      btn.className = 'entry-key' + (name.includes('♯') ? ' sharp' : '');
-      btn.dataset.midi = midi;
-      btn.textContent = name;
-      btn.addEventListener('click', () => addEntryNote(midi, btn));
-      grid.appendChild(btn);
-    }
+    const el = document.getElementById('entryPiano');
+    const low = 12 * (entryOctave + 1);
+    const width = el.parentElement.clientWidth || 340;
+    const whiteW = Math.max(22, Math.floor(width / 14));   // 14 white keys in two octaves
+    renderPiano(el, low, low + 23, { whiteW: whiteW, whiteH: Math.round(whiteW * 3.6), labelAll: true });
+    el.querySelectorAll('.key').forEach((key) => {
+      key.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        key.setPointerCapture(e.pointerId);
+        pressEntryKey(Number(key.dataset.midi), key);
+      });
+      ['pointerup', 'pointercancel', 'pointerleave'].forEach((evt) => {
+        key.addEventListener(evt, () => releaseEntryKey());
+      });
+    });
+  }
+
+  function setHeldReadout(ms) {
+    document.getElementById('entryHeld').textContent = ms == null
+      ? 'Hold a key — how long you hold it sets the note'
+      : `holding ${lengthLabel(steppedFromHold(ms))}`;
+  }
+
+  // A held key is never exactly a note value, so the length it produces is the
+  // nearest rung — the same ladder Shorter and Longer step along, so a played
+  // melody and an edited one speak the same language.
+  function steppedFromHold(ms) {
+    return NOTE_LENGTHS[nearestLengthIndex(Math.max(MIN_EDIT_NOTE_MS, ms))].ms;
+  }
+
+  function pressEntryKey(midi, keyEl) {
+    if (heldKey) releaseEntryKey();
+    ensureAudio();
+    keyEl.classList.add('held');
+    heldKey = { midi: midi, el: keyEl, startedAt: performance.now(), voice: startVoice(midi, 0.28, true) };
+    setHeldReadout(0);
+    heldTimer = setInterval(() => {
+      if (heldKey) setHeldReadout(performance.now() - heldKey.startedAt);
+    }, 60);
+  }
+
+  function releaseEntryKey() {
+    if (!heldKey) return;
+    const held = heldKey;
+    heldKey = null;
+    clearInterval(heldTimer);
+    heldTimer = null;
+    held.el.classList.remove('held');
+    stopVoice(held.voice);
+    setHeldReadout(null);
+    addEntryNote(held.midi, steppedFromHold(performance.now() - held.startedAt));
+  }
+
+  function addEntryNote(midi, durMs) {
+    takeNotes.push({ midi: midi, startMs: 0, durMs: durMs, restMs: pendingRestMs });
+    takeLyrics.push('');
+    takeHarmony.push(null);
+    pendingRestMs = 0;
+    selectedNoteIndex = null;
+    afterEntryChange();
   }
 
   function setEntryStatus() {
     const n = takeNotes.length;
     document.getElementById('entryStatus').textContent = n
-      ? `${n} note${n === 1 ? '' : 's'}${pendingRestMs ? ' · rest queued' : ''} — tap more, or edit below`
-      : 'Tap keys to build a melody';
+      ? `${n} note${n === 1 ? '' : 's'}${pendingRestMs ? ' · rest queued' : ''} — play more, or edit below`
+      : 'Play the keyboard to build a melody';
   }
 
   function afterEntryChange() {
@@ -3384,22 +3592,6 @@
     saveCurrentLine();
   }
 
-  function addEntryNote(midi, btnEl) {
-    ensureAudio();
-    startVoice(midi, 0.26, false, audioCtx.currentTime,
-      audioCtx.currentTime + Math.max(MIN_RING_SEC, entryLengthMs / 1000 + NOTE_TAIL_SEC));
-    takeNotes.push({ midi: midi, startMs: 0, durMs: entryLengthMs, restMs: pendingRestMs });
-    takeLyrics.push('');
-    takeHarmony.push(null);
-    pendingRestMs = 0;
-    selectedNoteIndex = null;
-    if (btnEl) {
-      btnEl.classList.add('hit');
-      setTimeout(() => btnEl.classList.remove('hit'), 120);
-    }
-    afterEntryChange();
-  }
-
   function undoEntryNote() {
     if (!takeNotes.length) return;
     takeNotes.pop();
@@ -3414,6 +3606,16 @@
     const el = document.getElementById('saveNote');
     el.textContent = text || '';
     el.className = 'signin-note' + (isError ? ' error' : '');
+  }
+
+  // The form describes the melody on screen. A new take is a different melody,
+  // so leaving the last one's song and artist sitting there is how you end up
+  // saving a verse of one song under the name of another.
+  function clearSaveForm() {
+    document.getElementById('saveSong').value = '';
+    document.getElementById('saveArtist').value = '';
+    document.getElementById('savePart').value = '';
+    saveNote('');
   }
 
   async function saveMelody() {
@@ -3451,10 +3653,10 @@
     try {
       ({ melodies } = await api('/api/melodies'));
     } catch (e) {
-      document.getElementById('libraryCard').hidden = true;
+      document.getElementById('homeLibraryBtn').hidden = true;
       return;
     }
-    document.getElementById('libraryCard').hidden = false;
+    document.getElementById('homeLibraryBtn').hidden = false;
     if (!melodies.length) {
       list.innerHTML = '<div class="day-empty">Nothing saved yet — the first melody can be yours.</div>';
       return;
@@ -3501,6 +3703,12 @@
         style: melody.take.style, custom: !!(melody.take.harmony || []).length,
       });
       editingLineIndex = null;
+      // The library is its own screen now, so opening a melody has to take you
+      // to the one place it can be edited and played.
+      switchView('play');
+      setMelodySource(melody.source === 'piano' ? 'piano' : 'voice');
+      showTakeCards(true);
+      renderTake();
       document.getElementById('saveSong').value = melody.song;
       document.getElementById('saveArtist').value = melody.artist;
       document.getElementById('savePart').value = melody.part;
@@ -3544,15 +3752,6 @@
     document.querySelectorAll('#sourceSwitch .mode-btn').forEach((btn) => {
       btn.addEventListener('click', () => setMelodySource(btn.dataset.source));
     });
-    const lenSel = document.getElementById('entryLengthSelect');
-    NOTE_LENGTHS.forEach((l) => {
-      const opt = document.createElement('option');
-      opt.value = String(l.ms);
-      opt.textContent = `${l.label} · ${(l.ms / 1000).toFixed(2)}s`;
-      if (l.ms === DEFAULT_LENGTH_MS) opt.selected = true;
-      lenSel.appendChild(opt);
-    });
-    lenSel.addEventListener('change', () => { entryLengthMs = Number(lenSel.value); });
     const octSel = document.getElementById('entryOctaveSelect');
     octSel.value = String(entryOctave);
     octSel.addEventListener('change', () => {
@@ -3560,13 +3759,14 @@
       renderEntryKeys();
     });
     document.getElementById('entryRestBtn').addEventListener('click', () => {
-      pendingRestMs += entryLengthMs;
+      pendingRestMs += DEFAULT_LENGTH_MS;   // one beat of silence per press
       setEntryStatus();
     });
     document.getElementById('entryUndoBtn').addEventListener('click', undoEntryNote);
     document.getElementById('entryClearBtn').addEventListener('click', () => {
       takeNotes = []; takeLyrics = []; takeHarmony = []; takeChords = []; takeKey = null;
       pendingRestMs = 0; selectedNoteIndex = null;
+      clearSaveForm();
       afterEntryChange();
     });
     renderEntryKeys();
@@ -3599,6 +3799,7 @@
       renderSongList();
       document.getElementById('lyricsInput').value = '';
       document.getElementById('lyricHint').textContent = '';
+      clearSaveForm();
       showTakeCards(false);
       setRecStatus('Ready when you are');
     });

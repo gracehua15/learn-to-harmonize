@@ -2,7 +2,11 @@
 
 A web app for learning to hear and sing harmony intervals.
 
-## Tabs
+## Screens
+
+A home screen with one door per activity, and a Home button back out of each —
+on a phone a tab bar spends a row of screen on every view and still doesn't say
+where you are.
 
 - **Learn** — pick a key and scale, tap a note to sustain it, then hold a
   degree (3rd, 4th, 5th, 6th, 8th — above or below) to hear the harmony that
@@ -23,7 +27,12 @@ A web app for learning to hear and sing harmony intervals.
   Note lengths come off one ladder of standard values — sixteenth through whole
   at 120 bpm — so Shorter and Longer land on lengths you can reason about rather
   than scaling each note by a percentage into its own odd number.
-- **Quiz** — coming soon.
+- **Melody library** — everything anyone has saved, opened straight into Play
+  to edit. The door only appears once there is something behind it.
+
+Practice is a short path rather than one long page: your name, then what you
+came for, then which drill, then its options, then the round itself — each with
+a way back to the step before.
 
 ## Practice tracking
 
