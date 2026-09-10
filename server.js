@@ -111,6 +111,132 @@ function readJson(req) {
 // be grouped and filtered rather than accumulating spellings of "chorus".
 const PARTS = ['verse', 'pre-chorus', 'chorus', 'bridge', 'intro', 'outro', 'hook', 'other'];
 
+// ---- stem splitting (LALAL.AI) ----
+// The key never reaches the browser: every call to LALAL.AI goes out from here,
+// and the finished stems are streamed back through this server so the page only
+// ever talks to its own origin.
+const LALAL = 'https://www.lalal.ai/api/v1';
+const LALAL_KEY = process.env.LALALAI_LICENSE_KEY || '';
+const UPLOAD_LIMIT = 30 * 1024 * 1024;   // a few minutes of mp3, well under LALAL.AI's own limit
+const STEMS = ['vocals', 'drum', 'piano', 'bass', 'guitar'];
+
+function readBinary(req, limit) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    let size = 0;
+    req.on('data', (c) => {
+      size += c.length;
+      if (size > limit) { req.destroy(); reject(new Error('too large')); return; }
+      chunks.push(c);
+    });
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+async function lalal(path, options) {
+  const r = await fetch(LALAL + path, Object.assign({}, options, {
+    headers: Object.assign({ 'X-License-Key': LALAL_KEY }, (options || {}).headers),
+  }));
+  const text = await r.text();
+  let body;
+  try { body = JSON.parse(text); } catch (e) { body = { detail: text.slice(0, 200) }; }
+  if (!r.ok) throw Object.assign(new Error(body.detail || body.error || 'split service error'), { status: r.status });
+  return body;
+}
+
+async function handleStems(req, res, url) {
+  if (!LALAL_KEY) return send(res, 503, { error: 'splitting unavailable' });
+
+  // What the page asks on load, to decide whether to show the door at all.
+  if (url.pathname === '/api/stems' && req.method === 'GET') {
+    const { minutes_left: minutesLeft } = await lalal('/limits/minutes_left/', { method: 'POST' });
+    return send(res, 200, { enabled: true, minutesLeft });
+  }
+
+  if (url.pathname === '/api/stems/split' && req.method === 'POST') {
+    const stem = STEMS.includes(url.searchParams.get('stem')) ? url.searchParams.get('stem') : 'vocals';
+    let audio;
+    try {
+      audio = await readBinary(req, UPLOAD_LIMIT);
+    } catch (e) {
+      return send(res, 413, { error: 'That file is larger than 30 MB — trim it or export a smaller one.' });
+    }
+    if (!audio.length) return send(res, 400, { error: 'No audio in the request.' });
+    // A name is required, and its extension is how LALAL.AI reads the format.
+    const name = (url.searchParams.get('name') || 'track.mp3').replace(/[^\w.\- ]/g, '_').slice(0, 80);
+    const uploaded = await lalal('/upload/', {
+      method: 'POST',
+      body: audio,
+      headers: {
+        'Content-Disposition': `attachment; filename="${name}"`,
+        'Content-Type': 'application/octet-stream',
+      },
+    });
+    const task = await lalal('/split/stem_separator/', {
+      method: 'POST',
+      body: JSON.stringify({ source_id: uploaded.id, presets: { stem } }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    return send(res, 200, { taskId: task.task_id, stem, duration: uploaded.duration });
+  }
+
+  // Splitting takes a while, so the page polls this and shows the progress.
+  if (url.pathname === '/api/stems/check' && req.method === 'GET') {
+    const taskId = url.searchParams.get('task') || '';
+    const body = await lalal('/check/', {
+      method: 'POST',
+      body: JSON.stringify({ task_ids: [taskId] }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const result = body.result && body.result[taskId];
+    if (!result) return send(res, 404, { error: 'not found' });
+    if (result.status === 'success') {
+      // Hand back labels only: the download URLs stay on this side, so the
+      // browser fetches the audio from /api/stems/track and the split service
+      // is never addressed from the page.
+      return send(res, 200, {
+        status: 'success',
+        tracks: (result.result.tracks || []).map((t) => ({ type: t.type, label: t.label })),
+      });
+    }
+    if (result.status === 'progress') {
+      return send(res, 200, { status: 'progress', progress: result.progress || 0 });
+    }
+    return send(res, 200, { status: result.status, error: result.error || null });
+  }
+
+  if (url.pathname === '/api/stems/track' && req.method === 'GET') {
+    const taskId = url.searchParams.get('task') || '';
+    const wanted = url.searchParams.get('type') === 'back' ? 'back' : 'stem';
+    const body = await lalal('/check/', {
+      method: 'POST',
+      body: JSON.stringify({ task_ids: [taskId] }),
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const result = body.result && body.result[taskId];
+    if (!result || result.status !== 'success') return send(res, 404, { error: 'not ready' });
+    const track = (result.result.tracks || []).find((t) => t.type === wanted);
+    if (!track) return send(res, 404, { error: 'not found' });
+    const audio = await fetch(track.url);
+    if (!audio.ok) return send(res, 502, { error: 'could not fetch the split track' });
+    res.writeHead(200, {
+      'Content-Type': audio.headers.get('content-type') || 'audio/mpeg',
+      'Content-Disposition': `attachment; filename="${track.label}.mp3"`,
+      'Cache-Control': 'no-store',
+    });
+    const reader = audio.body.getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      res.write(Buffer.from(value));
+    }
+    return res.end();
+  }
+
+  return send(res, 404, { error: 'not found' });
+}
+
 const DAY_RE = /^\d{4}-\d{2}-\d{2}$/;
 const isDay = (s) => typeof s === 'string' && DAY_RE.test(s) && !isNaN(Date.parse(s));
 
@@ -160,7 +286,12 @@ function bestStreakFrom(days) {
 // ---- API ----
 async function handleApi(req, res, url) {
   if (url.pathname === '/api/health') {
-    return send(res, 200, { ok: true, tracking: dbReady });
+    return send(res, 200, { ok: true, tracking: dbReady, splitting: Boolean(LALAL_KEY) });
+  }
+  // Splitting stands on its own — it needs no database, so it comes before the
+  // check that turns the rest of the API off.
+  if (url.pathname === '/api/stems' || url.pathname.startsWith('/api/stems/')) {
+    return handleStems(req, res, url);
   }
   if (!dbReady) return send(res, 503, { error: 'tracking unavailable' });
 

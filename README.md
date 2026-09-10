@@ -27,6 +27,11 @@ where you are.
   Note lengths come off one ladder of standard values — sixteenth through whole
   at 120 bpm — so Shorter and Longer land on lengths you can reason about rather
   than scaling each note by a percentage into its own odd number.
+- **Split a track** — hand it an audio file and it comes back as two: the part
+  you asked for (vocals, piano, guitar, bass or drums) and everything else,
+  both playable in the page and downloadable. Meant for your own recordings
+  and anything you hold the rights to. The door only appears when the server
+  has a splitting key.
 - **Melody library** — everything anyone has saved, opened straight into Play
   to edit. The door only appears once there is something behind it.
 
@@ -72,6 +77,13 @@ rather than failing — practice runs untracked and the library hides itself.
 
 (Sample playback and the practice mic both load resources via `fetch`, which
 browsers block from a bare `file://` URL — serve it over HTTP, even locally.)
+
+Splitting is a separate switch on the same server: set `LALALAI_LICENSE_KEY` to
+a [LALAL.AI](https://www.lalal.ai/api/v1/docs/) license key and the Split door
+appears. The key stays on the server — the browser uploads to this server,
+which talks to LALAL.AI and streams the finished stems back, so the page never
+holds the key or addresses the split service. Uploads are capped at 30 MB, and
+LALAL.AI bills per minute of audio processed.
 
 ## Deploying
 

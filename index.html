@@ -489,6 +489,24 @@
   .song-line .line-btn.danger { color: var(--danger); }
   .song-line.playing .line-btn { color: var(--on-fill); }
 
+  /* Split: pull one part out of a track you own */
+  .split-drop {
+    display: block; text-align: center; cursor: pointer;
+    border: 1px dashed var(--border); border-radius: 12px; background: var(--card2);
+    padding: 22px 14px; font-size: 13px; font-weight: 700; color: var(--text);
+  }
+  .split-drop:hover, .split-drop.over { border-color: var(--accent); color: var(--accent); }
+  .split-drop span { display: block; margin-top: 6px; font-size: 11.5px; font-weight: 500; color: var(--muted); }
+  .split-drop input { display: none; }
+  .split-note { font-size: 12px; color: var(--muted); line-height: 1.5; margin-top: 12px; }
+  .split-note.error { color: var(--danger); }
+  .split-bar { height: 6px; border-radius: 3px; background: var(--card2); overflow: hidden; margin-top: 12px; }
+  .split-bar > i { display: block; height: 100%; width: 0; background: var(--base-grad); transition: width .3s; }
+  .split-stem { margin-top: 14px; }
+  .split-stem .stem-name { font-size: 13px; font-weight: 800; margin-bottom: 6px; }
+  .split-stem audio { width: 100%; }
+  .split-stem a { font-size: 12px; font-weight: 700; color: var(--accent); }
+
   .file-warning {
     background: #f6e3d6; border: 1px solid #d9b295; color: #7d4223;
     border-radius: 12px; padding: 12px 14px; font-size: 12.5px; line-height: 1.5;
@@ -533,6 +551,11 @@
         <span class="home-icon">🎹</span>
         <span class="home-name">Play</span>
         <span class="home-sub">Make a melody and harmonize it</span>
+      </button>
+      <button class="home-btn" data-view="split" id="homeSplitBtn" hidden>
+        <span class="home-icon">🎚️</span>
+        <span class="home-name">Split a track</span>
+        <span class="home-sub">Pull the vocal off your own recording</span>
       </button>
       <button class="home-btn" data-view="library" id="homeLibraryBtn" hidden>
         <span class="home-icon">📚</span>
@@ -928,6 +951,51 @@
         <button class="pool-all" id="libraryRefreshBtn">refresh</button>
       </div>
       <div class="library-list" id="libraryList"></div>
+    </div>
+  </div>
+
+  <div id="splitView" hidden>
+    <button class="home-link" data-home>← Home</button>
+    <div class="card">
+      <div class="grid-title">
+        Split a track into one part and the rest of the mix
+        <span class="key-badge" id="splitMinutes"></span>
+      </div>
+      <div class="controls">
+        <div class="field">
+          <label for="splitStemSelect">Part to pull out</label>
+          <select id="splitStemSelect">
+            <option value="vocals" selected>Vocals</option>
+            <option value="piano">Piano</option>
+            <option value="guitar">Guitar</option>
+            <option value="bass">Bass</option>
+            <option value="drum">Drums</option>
+          </select>
+        </div>
+      </div>
+      <label class="split-drop" id="splitDrop">
+        Choose an audio file
+        <span>mp3, wav, m4a or flac — up to 30 MB. Drag one here too.</span>
+        <input type="file" id="splitFile" accept="audio/*">
+      </label>
+      <div class="split-bar" id="splitBar" hidden><i id="splitBarFill"></i></div>
+      <div class="split-note" id="splitNote">
+        Splitting runs on your own recordings and anything you hold the rights to.
+      </div>
+    </div>
+
+    <div class="card" id="splitResultCard" hidden>
+      <div class="grid-title" id="splitResultTitle">Split</div>
+      <div class="split-stem">
+        <div class="stem-name" id="splitStemName">Vocals</div>
+        <audio id="splitStemAudio" controls preload="none"></audio>
+        <a id="splitStemLink" download>Download</a>
+      </div>
+      <div class="split-stem">
+        <div class="stem-name" id="splitBackName">Everything else</div>
+        <audio id="splitBackAudio" controls preload="none"></audio>
+        <a id="splitBackLink" download>Download</a>
+      </div>
     </div>
   </div>
 
@@ -1452,12 +1520,13 @@
   // One screen at a time, with a way back — a tab bar spends a row of a phone
   // on every view and still doesn't say where you are.
   function switchView(view) {
-    ['home', 'learn', 'practice', 'play', 'library'].forEach((v) => {
+    ['home', 'learn', 'practice', 'play', 'split', 'library'].forEach((v) => {
       document.getElementById(v + 'View').hidden = v !== view;
     });
     if (view !== 'learn') stopEverything(); // don't leave Learn's base/harmony notes sounding in the background
     if (view !== 'practice') stopListening(); // release the mic once it's off-screen
     if (view !== 'play') { stopRecording(); stopTakePlayback(); } // same for Play's mic + playback
+    if (view !== 'split') pauseSplitAudio();  // and for the split stems
     if (view === 'practice') practiceStep(practiceEntryStep());
     if (view === 'library') loadLibrary();
     window.scrollTo(0, 0);
@@ -3721,6 +3790,135 @@
     }
   }
 
+  // ---- split: pull one part out of a track ----
+  // The server holds the LALAL.AI key and streams the finished stems back, so
+  // everything here talks to this origin only.
+  const STEM_LABELS = { vocals: 'Vocals', piano: 'Piano', guitar: 'Guitar', bass: 'Bass', drum: 'Drums' };
+  let splitPoll = null;
+
+  function splitNote(text, isError) {
+    const el = document.getElementById('splitNote');
+    el.textContent = text;
+    el.className = 'split-note' + (isError ? ' error' : '');
+  }
+
+  function splitProgress(percent) {
+    const bar = document.getElementById('splitBar');
+    bar.hidden = percent == null;
+    document.getElementById('splitBarFill').style.width = `${Math.max(0, Math.min(100, percent || 0))}%`;
+  }
+
+  function pauseSplitAudio() {
+    ['splitStemAudio', 'splitBackAudio'].forEach((id) => {
+      const el = document.getElementById(id);
+      if (el) el.pause();
+    });
+  }
+
+  async function loadSplitAvailability() {
+    let info;
+    try {
+      info = await api('/api/stems');
+    } catch (e) {
+      document.getElementById('homeSplitBtn').hidden = true;
+      return;
+    }
+    document.getElementById('homeSplitBtn').hidden = false;
+    if (typeof info.minutesLeft === 'number') {
+      document.getElementById('splitMinutes').textContent = `${Math.floor(info.minutesLeft)} min left`;
+    }
+  }
+
+  async function startSplit(file) {
+    if (!file) return;
+    if (splitPoll) { clearTimeout(splitPoll); splitPoll = null; }
+    pauseSplitAudio();
+    document.getElementById('splitResultCard').hidden = true;
+    const stem = document.getElementById('splitStemSelect').value;
+    splitNote(`Uploading ${file.name}…`, false);
+    splitProgress(0);
+    let taskId;
+    try {
+      const query = `?stem=${encodeURIComponent(stem)}&name=${encodeURIComponent(file.name)}`;
+      const res = await fetch(`/api/stems/split${query}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream' },
+        body: file,
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `upload failed (${res.status})`);
+      taskId = body.taskId;
+    } catch (e) {
+      splitProgress(null);
+      splitNote(e.message, true);
+      return;
+    }
+    splitNote('Splitting — this takes about as long as the track itself.', false);
+    pollSplit(taskId, stem, file.name);
+  }
+
+  function pollSplit(taskId, stem, name) {
+    const tick = async () => {
+      let body;
+      try {
+        body = await api(`/api/stems/check?task=${encodeURIComponent(taskId)}`);
+      } catch (e) {
+        splitProgress(null);
+        splitNote(e.message, true);
+        return;
+      }
+      if (body.status === 'progress') {
+        splitProgress(body.progress);
+        splitPoll = setTimeout(tick, 3000);
+        return;
+      }
+      splitProgress(null);
+      if (body.status !== 'success') {
+        splitNote(body.error || 'The split didn’t finish — try that file again.', true);
+        return;
+      }
+      showSplitResult(taskId, stem, name);
+    };
+    splitPoll = setTimeout(tick, 3000);
+  }
+
+  function showSplitResult(taskId, stem, name) {
+    const label = STEM_LABELS[stem] || stem;
+    const url = (type) => `/api/stems/track?task=${encodeURIComponent(taskId)}&type=${type}`;
+    document.getElementById('splitResultTitle').textContent = name;
+    document.getElementById('splitStemName').textContent = label;
+    document.getElementById('splitBackName').textContent = `Everything but the ${label.toLowerCase()}`;
+    document.getElementById('splitStemAudio').src = url('stem');
+    document.getElementById('splitBackAudio').src = url('back');
+    const stemLink = document.getElementById('splitStemLink');
+    const backLink = document.getElementById('splitBackLink');
+    stemLink.href = url('stem');
+    stemLink.download = `${label.toLowerCase()}.mp3`;
+    backLink.href = url('back');
+    backLink.download = `no-${label.toLowerCase()}.mp3`;
+    document.getElementById('splitResultCard').hidden = false;
+    splitNote('Done — play either part, or download it.', false);
+  }
+
+  function initSplitControls() {
+    const drop = document.getElementById('splitDrop');
+    const input = document.getElementById('splitFile');
+    input.addEventListener('change', () => {
+      startSplit(input.files[0]);
+      input.value = '';        // so choosing the same file twice still fires
+    });
+    ['dragenter', 'dragover'].forEach((evt) => {
+      drop.addEventListener(evt, (e) => { e.preventDefault(); drop.classList.add('over'); });
+    });
+    ['dragleave', 'drop'].forEach((evt) => {
+      drop.addEventListener(evt, () => drop.classList.remove('over'));
+    });
+    drop.addEventListener('drop', (e) => {
+      e.preventDefault();
+      startSplit(e.dataTransfer.files[0]);
+    });
+  }
+
   function initPlayControls() {
     document.getElementById('recordBtn').addEventListener('click', () => {
       if (recording) stopRecording();
@@ -3818,6 +4016,8 @@
   rebuildAll();
   initModeSwitch();
   initPracticeControls();
+  initSplitControls();
+  loadSplitAvailability();
   initTracking();
   initPlayControls();
   clearWave();
